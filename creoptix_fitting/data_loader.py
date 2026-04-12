@@ -14,7 +14,6 @@ import io
 from xml.etree import ElementTree as ET
 
 import h5py
-import numpy as np
 
 
 # ---------------------------------------------------------------------------

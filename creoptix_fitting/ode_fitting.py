@@ -15,10 +15,8 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 
 import numpy as np
 from scipy.optimize import least_squares
-from .models import (build_concentration_profile, build_pulsed_concentration_profile,
-                     select_dmso_cal,
-                     build_weight_mask, build_full_weight_mask,
-                     double_reference, simulate_sensorgram)
+from .models import (build_pulsed_concentration_profile, select_dmso_cal,
+                     build_full_weight_mask, simulate_sensorgram)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
 
@@ -61,7 +59,7 @@ def _solve_R0_Rss(kd, t_dissoc, signal_dissoc, t0):
 
 
 def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
-            n_starts=3, rng_seed=42, skip_s=1.0):
+            n_starts=3, rng_seed=None, skip_s=1.0):
     """Fit 1:1 Langmuir parameters via DK-seeded ODE refinement.
 
     Three-phase approach:
@@ -85,8 +83,8 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         Initial parameter estimates (from Direct Kinetics).
     n_starts : int
         Number of starting points for ODE refinement.
-    rng_seed : int
-        Random seed for reproducibility.
+    rng_seed : int or None
+        Random seed for reproducibility.  None (default) = non-reproducible.
     skip_s : float
         Seconds to skip after rinse onset to avoid transport lag.
     """
@@ -124,7 +122,6 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     ub_full = np.array([1e8, 1e4])
 
     rng = np.random.default_rng(rng_seed)
-    # rng = np.random.default_rng()
     starts = [np.clip([ka_est, Rmax_est], lb_full, ub_full)]
     # Also try DK's ka/Rmax as a starting point
     starts.append(np.clip([max(ka0, 1.0), max(Rmax0, 2.0)], lb_full, ub_full))

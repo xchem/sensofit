@@ -15,8 +15,7 @@ robustness.  Results are aggregated via median over converged fits.
 import numpy as np
 from scipy.optimize import least_squares
 from .models import (build_pulsed_concentration_profile, select_dmso_cal,
-                     build_full_weight_mask, double_reference,
-                     simulate_sensorgram)
+                     build_full_weight_mask, double_reference)
 from .ode_core import _run_fit, aggregate_fits, BOUNDS_LO, BOUNDS_HI
 
 

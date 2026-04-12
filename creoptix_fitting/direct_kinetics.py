@@ -19,7 +19,7 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 import numpy as np
 from .models import (build_concentration_profile, select_dmso_cal,
                      smooth_and_differentiate, build_weight_mask,
-                     double_reference, build_pulse_mask)
+                     double_reference)
 
 
 def direct_kinetics_fit(t, R_smooth, dRdt, c, w=None, lambda_reg=0.0):
