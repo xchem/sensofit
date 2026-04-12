@@ -1,0 +1,9 @@
+attic/
+*.cxw
+__pycache__/
+*.pyc
+.DS_Store
+*.png
+*.csv
+.ipynb_checkpoints/
+plan.md
