@@ -6,4 +6,5 @@ __pycache__/
 *.png
 *.csv
 .ipynb_checkpoints/
+results/
 plan.md
