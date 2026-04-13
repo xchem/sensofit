@@ -432,6 +432,45 @@ def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
 
 
 # ---------------------------------------------------------------------------
+# Fitting window trimming
+# ---------------------------------------------------------------------------
+
+def trim_to_fit_window(t, signal, w, markers, pre_s=0.5, post_s=2.0):
+    """Trim arrays to the active fitting window [Injection-pre_s, RinseEnd+post_s].
+
+    The ODE only needs to integrate from just before injection (where
+    R≈0 and c(t) is about to rise) through dissociation.  Excluding the
+    pre-injection baseline and post-dissociation tail speeds up fitting
+    and avoids modelling irrelevant regions.
+
+    Parameters
+    ----------
+    t, signal, w : np.ndarray
+        Full-cycle time, signal, and weight mask.
+    markers : dict
+        Cycle markers with 'Injection' and 'RinseEnd'.
+    pre_s : float
+        Seconds before Injection to include (default 0.5).
+    post_s : float
+        Seconds after RinseEnd to include (default 2.0).
+
+    Returns
+    -------
+    t_trim, signal_trim, w_trim : np.ndarray
+        Trimmed arrays.
+    fit_mask : np.ndarray (bool)
+        Boolean mask on the original arrays so that
+        ``t[fit_mask] == t_trim``.
+    """
+    inj = markers.get('Injection', t[0])
+    rinse_end = markers.get('RinseEnd', t[-1])
+    t_start = inj - pre_s
+    t_end = rinse_end + post_s
+    fit_mask = (t >= t_start) & (t <= t_end)
+    return t[fit_mask], signal[fit_mask], w[fit_mask], fit_mask
+
+
+# ---------------------------------------------------------------------------
 # 1:1 Langmuir ODE
 # ---------------------------------------------------------------------------
 

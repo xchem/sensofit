@@ -16,7 +16,8 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 import numpy as np
 from scipy.optimize import least_squares
 from .models import (build_pulsed_concentration_profile, select_dmso_cal,
-                     build_full_weight_mask, simulate_sensorgram)
+                     build_full_weight_mask, simulate_sensorgram,
+                     trim_to_fit_window)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
 
@@ -267,9 +268,22 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     # Full weight mask: buffer pulses during association + dissociation
     w = build_full_weight_mask(t, sample['markers'], dmso)
 
-    # Step 2: ODE fit — full sensorgram with pulse-aware weighting
-    ode = ode_fit(t, signal, c_func_pulsed, w, sample['markers'],
+    # Trim to active fitting window (Injection → RinseEnd + margin)
+    t_fit, sig_fit, w_fit, fit_mask = trim_to_fit_window(
+        t, signal, w, sample['markers'])
+
+    # Step 2: ODE fit on trimmed arrays
+    ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
                   ka0=dk['ka'], kd0=dk['kd'], Rmax0=dk['Rmax'])
+
+    # Map R_fit back to full time grid
+    R_fit_full = np.full_like(signal, np.nan)
+    R_fit_full[fit_mask] = ode['R_fit']
+    ode['R_fit'] = R_fit_full
+
+    residuals_full = np.zeros_like(signal)
+    residuals_full[fit_mask] = ode['residuals']
+    ode['residuals'] = residuals_full
 
     # Store envelope c_func for DK results / visualization
     ode['c_func'] = dk['c_func']
