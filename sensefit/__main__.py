@@ -32,7 +32,7 @@ def _find_cxw_files(path):
     sys.exit(1)
 
 
-def _run_mode(filepath, mode, skip_nsb, output_dir):
+def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -41,7 +41,8 @@ def _run_mode(filepath, mode, skip_nsb, output_dir):
     print(f'Mode: {mode.upper()}')
     print(f'{"=" * 60}')
 
-    df, data = batch_fit(filepath, mode=mode, progress=True)
+    df, data = batch_fit(filepath, mode=mode, include_nsb=not skip_nsb,
+                         channels=channels, progress=True)
 
     # Add source file info
     df.insert(0, 'source_file', os.path.basename(filepath))
@@ -57,16 +58,18 @@ def _run_mode(filepath, mode, skip_nsb, output_dir):
 
     # Save plots
     samples = data['samples']
+    dmso_cals = data['dmso_cals']
+    blanks = data['blanks']
     results = []
     for _, row in df.iterrows():
         idx = row.get('cycle_index')
-        match = [s for s in samples if s['index'] == idx]
+        ch = row.get('channel', '')
+        match = [s for s in samples
+                 if s['index'] == idx and s.get('channel', '') == ch]
         if not match:
             results.append(None)
             continue
         sample = match[0]
-        # Re-fit for the result dict (we need the full arrays for plotting)
-        # Instead, store during batch_fit — for now, re-fit individually
         if row.get('nonspecific', False) or not row.get('success', False):
             results.append(None)
         else:
@@ -75,25 +78,27 @@ def _run_mode(filepath, mode, skip_nsb, output_dir):
                     from .direct_kinetics import fit_sample as fit_fn
                 else:
                     from .ode_fitting import fit_sample as fit_fn
-                result = fit_fn(sample, data['dmso_cals'],
-                                blanks=data['blanks'])
+                # Channel-matched DMSO/blanks
+                ch_dmso = [d for d in dmso_cals if d.get('channel') == ch]
+                ch_blanks = [b for b in blanks if b.get('channel') == ch]
+                result = fit_fn(sample, ch_dmso or dmso_cals,
+                                blanks=ch_blanks or blanks)
                 results.append(result)
             except Exception:
                 results.append(None)
 
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
     matched_samples = []
-    matched_results = []
     for _, row in df.iterrows():
         idx = row.get('cycle_index')
-        match = [s for s in samples if s['index'] == idx]
+        ch = row.get('channel', '')
+        match = [s for s in samples
+                 if s['index'] == idx and s.get('channel', '') == ch]
         if match:
             matched_samples.append(match[0])
         else:
             matched_samples.append({'compound': 'Unknown', 'concentration_M': 0,
-                                    'index': idx})
-    # Align results with matched_samples
-    matched_results = results
+                                    'index': idx, 'channel': ch})
 
     if matched_results:
         paths = save_fit_plots(matched_results, matched_samples,
@@ -125,12 +130,18 @@ def main(argv=None):
         '--include-nsb', action='store_true', default=False,
         help='Include non-specific binders in fitting (default: skip).',
     )
+    parser.add_argument(
+        '--channels', nargs='*', type=int, default=None,
+        help='Active flow cell numbers to process (e.g. --channels 2 3). '
+             'Default: all active channels.',
+    )
 
     args = parser.parse_args(argv)
 
     cxw_files = _find_cxw_files(args.input)
     os.makedirs(args.output, exist_ok=True)
     skip_nsb = not args.include_nsb
+    channels = args.channels if args.channels else 'all'
 
     modes = ['dk', 'ode'] if args.mode == 'both' else [args.mode]
 
@@ -139,15 +150,17 @@ def main(argv=None):
 
     for filepath in cxw_files:
         for mode in modes:
-            df = _run_mode(filepath, mode, skip_nsb, args.output)
+            df = _run_mode(filepath, mode, skip_nsb, args.output,
+                          channels=channels)
             all_dfs.append(df)
 
     # Combine and save
     combined = pd.concat(all_dfs, ignore_index=True)
 
     # Reorder columns: source_file, cycle_index, compound first
-    priority = ['source_file', 'cycle_index', 'compound', 'concentration_M',
-                'concentration_uM', 'fit_mode', 'ka', 'kd', 'KD', 'KD_uM',
+    priority = ['source_file', 'cycle_index', 'channel', 'compound',
+                'concentration_M', 'concentration_uM', 'fit_mode',
+                'ka', 'kd', 'KD', 'KD_uM',
                 'Rmax', 'sigma_res', 'flag', 'flag_reason']
     ordered = [c for c in priority if c in combined.columns]
     remaining = [c for c in combined.columns if c not in ordered]

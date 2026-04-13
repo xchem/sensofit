@@ -55,8 +55,11 @@ def plot_fit(result, sample, ax=None, title=None):
     # Labels
     compound = sample.get('compound', 'Unknown')
     conc_uM = sample.get('concentration_M', 0) * 1e6
+    channel = sample.get('channel', '')
     if title is None:
         title = f'{compound}  ({conc_uM:.2f} µM)'
+        if channel:
+            title += f'  [{channel}]'
     ax.set_title(title, fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Response (pg/mm²)')
@@ -122,10 +125,15 @@ def save_fit_plots(results, samples, output_dir, mode='ode'):
             continue
 
         compound = sample.get('compound', 'Unknown')
+        channel = sample.get('channel', '')
         # Sanitise compound name for filename
         safe_name = _sanitise_filename(compound)
+        safe_ch = _sanitise_filename(channel) if channel else ''
         idx = sample.get('index', i)
-        fname = f'{idx:03d}_{safe_name}.png'
+        parts = [f'{idx:03d}', safe_name]
+        if safe_ch:
+            parts.append(safe_ch)
+        fname = '_'.join(parts) + '.png'
         fpath = os.path.join(output_dir, fname)
 
         fig = plot_fit(result, sample)

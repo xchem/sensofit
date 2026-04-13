@@ -13,6 +13,7 @@ import zipfile
 import io
 from xml.etree import ElementTree as ET
 
+import numpy as np
 import h5py
 
 
@@ -77,11 +78,49 @@ def _fc_to_channel(fc_num: int) -> int:
 
 
 def _detect_channels(project_root: ET.Element):
-    """Determine active (ligand) and reference channels from XML.
+    """Determine active and reference channels from ChannelReferencings.
 
-    Returns (active_ch, reference_ch, active_fc, reference_fc).
+    The RAPID Kinetics (Pulse) serie stores ``ChannelReferencings``
+    entries whose ``ChannelDto.Id`` encodes an active/reference pair as
+    ``active_ch * 100 + reference_ch`` (e.g. 907 = ch9−ch7 = FC2−FC1).
+
+    Returns
+    -------
+    channel_pairs : list[dict]
+        One dict per active channel with keys:
+        ``active_ch``, ``reference_ch``, ``active_fc``, ``reference_fc``.
     """
-    # 1. Find the Capture cycle in the Immobilization serie
+    def _channel_to_fc(ch: int) -> int:
+        return (ch - 5) // 2  # inverse of _fc_to_channel
+
+    for serie in project_root.findall('.//Serie'):
+        if serie.findtext('Type') != 'Pulse':
+            continue
+        pairs = []
+        for cr in serie.findall('.//ChannelReferencings'):
+            dto = cr.find('ChannelDto')
+            if dto is None:
+                continue
+            cid = int(dto.findtext('Id', '0'))
+            if cid == 0:
+                continue
+            ref_ch = cid % 100
+            act_ch = cid // 100
+            pairs.append({
+                'active_ch': act_ch,
+                'reference_ch': ref_ch,
+                'active_fc': _channel_to_fc(act_ch),
+                'reference_fc': _channel_to_fc(ref_ch),
+            })
+        if pairs:
+            return pairs
+
+    # Fallback: use the old heuristic (single channel)
+    return _detect_channels_legacy(project_root)
+
+
+def _detect_channels_legacy(project_root: ET.Element):
+    """Legacy single-channel detection via Immobilization Capture cycle."""
     capture_fc = None
     for serie in project_root.findall('.//Serie'):
         if serie.findtext('Type') != 'Immobilization':
@@ -99,7 +138,6 @@ def _detect_channels(project_root: ET.Element):
                             break
                 break
 
-    # 2. Find which FCs are used in RAPID Kinetics sample cycles
     rk_fcs = []
     for serie in project_root.findall('.//Serie'):
         if serie.findtext('Type') != 'Pulse':
@@ -119,13 +157,12 @@ def _detect_channels(project_root: ET.Element):
 
     active_fc = capture_fc
     reference_fc = [fc for fc in rk_fcs if fc != capture_fc][0]
-
-    return (
-        _fc_to_channel(active_fc),
-        _fc_to_channel(reference_fc),
-        active_fc,
-        reference_fc,
-    )
+    return [{
+        'active_ch': _fc_to_channel(active_fc),
+        'reference_ch': _fc_to_channel(reference_fc),
+        'active_fc': active_fc,
+        'reference_fc': reference_fc,
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -223,25 +260,35 @@ def _load_cycle_data(h5f: h5py.File, guid: str, active_ch: int, reference_ch: in
 # Public API
 # ---------------------------------------------------------------------------
 
-def load_cxw(filepath: str) -> dict:
+def load_cxw(filepath: str, channels='all') -> dict:
     """Load a Creoptix .cxw experiment file.
 
     Parameters
     ----------
     filepath : str
         Path to the .cxw file.
+    channels : str or list[int]
+        Which active flow cells to load:
+        - ``'all'`` (default): load every active channel found in the file.
+        - A list of FC numbers, e.g. ``[2, 3]``: load only those channels.
+        Each sample cycle produces one entry per active channel.  The
+        ``channel`` field (e.g. ``'FC2-FC1'``) identifies which pair was
+        used.
 
     Returns
     -------
     dict with keys:
         config : dict
-            active_fc, reference_fc, active_channel, reference_channel
+            ``channel_pairs``: list of dicts with active/reference FC info.
+            Legacy keys ``active_fc``, ``reference_fc``, ``active_channel``,
+            ``reference_channel`` are set to the **first** pair for
+            backwards compatibility.
         samples : list[dict]
             Sample and ControlSample cycles.  Each dict has:
             index, cycle_type, guid, name, compound, concentration_M, mw,
-            markers, time, signal, raw_active, raw_reference
+            markers, time, signal, raw_active, raw_reference, channel
         dmso_cals : list[dict]
-            DMSO Cal. cycles (same fields, compound/concentration not relevant).
+            DMSO Cal. cycles (same fields).
         blanks : list[dict]
             Blank cycles.
         all_cycles : list[dict]
@@ -251,8 +298,18 @@ def load_cxw(filepath: str) -> dict:
     with zipfile.ZipFile(filepath, 'r') as zf:
         project = _parse_xml(zf, '_project.cx3')
 
-        # Channel config
-        active_ch, reference_ch, active_fc, reference_fc = _detect_channels(project)
+        # Channel config — returns list of {active_ch, reference_ch, ...}
+        all_pairs = _detect_channels(project)
+
+        # Filter to requested channels
+        if channels != 'all':
+            requested = set(channels)
+            all_pairs = [p for p in all_pairs if p['active_fc'] in requested]
+            if not all_pairs:
+                avail = [p['active_fc'] for p in _detect_channels(project)]
+                raise ValueError(
+                    f'No matching channels. Requested {channels}, '
+                    f'available active FCs: {avail}')
 
         # Find RAPID Kinetics serie
         rk_serie = None
@@ -282,29 +339,37 @@ def load_cxw(filepath: str) -> dict:
         if cyc['cycle_type'] not in ('Sample', 'ControlSample', 'DMSO Cal.', 'Blank'):
             continue
 
-        result = _load_cycle_data(h5f, cyc['guid'], active_ch, reference_ch)
-        if result is None:
-            continue
+        for pair in all_pairs:
+            result = _load_cycle_data(
+                h5f, cyc['guid'], pair['active_ch'], pair['reference_ch'])
+            if result is None:
+                continue
 
-        time, signal, raw_active, raw_reference = result
-        entry = {**cyc, 'time': time, 'signal': signal,
-                 'raw_active': raw_active, 'raw_reference': raw_reference}
+            time, signal, raw_active, raw_reference = result
+            channel_label = f"FC{pair['active_fc']}-FC{pair['reference_fc']}"
+            entry = {**cyc, 'time': time, 'signal': signal,
+                     'raw_active': raw_active, 'raw_reference': raw_reference,
+                     'channel': channel_label}
 
-        if cyc['cycle_type'] in ('Sample', 'ControlSample'):
-            samples.append(entry)
-        elif cyc['cycle_type'] == 'DMSO Cal.':
-            dmso_cals.append(entry)
-        elif cyc['cycle_type'] == 'Blank':
-            blanks.append(entry)
+            if cyc['cycle_type'] in ('Sample', 'ControlSample'):
+                samples.append(entry)
+            elif cyc['cycle_type'] == 'DMSO Cal.':
+                dmso_cals.append(entry)
+            elif cyc['cycle_type'] == 'Blank':
+                blanks.append(entry)
 
     h5f.close()
 
+    # Backwards-compatible config uses first pair
+    first = all_pairs[0]
+
     return {
         'config': {
-            'active_fc': active_fc,
-            'reference_fc': reference_fc,
-            'active_channel': active_ch,
-            'reference_channel': reference_ch,
+            'channel_pairs': all_pairs,
+            'active_fc': first['active_fc'],
+            'reference_fc': first['reference_fc'],
+            'active_channel': first['active_ch'],
+            'reference_channel': first['reference_ch'],
         },
         'samples': samples,
         'dmso_cals': dmso_cals,

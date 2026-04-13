@@ -18,7 +18,8 @@ from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
 
-def batch_fit(filepath, mode='dk', include_nsb=False, progress=True):
+def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
+              progress=True):
     """Fit all samples in a .cxw file and return a DataFrame.
 
     Parameters
@@ -32,17 +33,21 @@ def batch_fit(filepath, mode='dk', include_nsb=False, progress=True):
     include_nsb : bool
         If True, fit non-specific binders instead of skipping them.
         They are still flagged in the ``nonspecific`` column.
+    channels : str or list[int]
+        Which active flow cells to process.
+        - ``'all'`` (default): every active channel in the file.
+        - A list of FC numbers, e.g. ``[2]``: only that channel.
     progress : bool
         Print progress to stdout.
 
     Returns
     -------
     df : pd.DataFrame
-        One row per sample with kinetic parameters and metadata.
+        One row per sample per channel with kinetic parameters and metadata.
     data : dict
         Raw data from ``load_cxw()`` for downstream use.
     """
-    data = load_cxw(filepath)
+    data = load_cxw(filepath, channels=channels)
     samples = data['samples']
     dmso_cals = data['dmso_cals']
     blanks = data['blanks']
@@ -60,9 +65,20 @@ def batch_fit(filepath, mode='dk', include_nsb=False, progress=True):
         if progress:
             elapsed = time.time() - t0
             eta = (elapsed / (i + 1)) * (n - i - 1) if i > 0 else 0
-            print(f'\r  [{i+1}/{n}] {sample["compound"]:20s}  '
+            ch_label = sample.get('channel', '')
+            print(f'\r  [{i+1}/{n}] {sample["compound"]:20s} {ch_label:8s} '
                   f'{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining',
                   end='', flush=True)
+
+        # Filter DMSO cals and blanks to same channel
+        ch = sample.get('channel')
+        ch_dmso = [d for d in dmso_cals if d.get('channel') == ch]
+        ch_blanks = [b for b in blanks if b.get('channel') == ch]
+        # Fallback: if no channel-matched cals, use all (single-channel files)
+        if not ch_dmso:
+            ch_dmso = dmso_cals
+        if not ch_blanks:
+            ch_blanks = blanks
 
         # Check for non-specific binding before fitting
         nsb, ref_dissoc = is_nonspecific_binder(sample)
@@ -76,7 +92,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, progress=True):
             continue
 
         try:
-            result = fit_func(sample, dmso_cals, blanks=blanks)
+            result = fit_func(sample, ch_dmso, blanks=ch_blanks)
             row = _extract_row(sample, result, mode)
             row['fit_error'] = None
         except Exception as e:
@@ -111,6 +127,7 @@ def _extract_row(sample, result, mode):
         'mw':              sample.get('mw'),
         'slot':            sample.get('slot'),
         'cycle_index':     sample['index'],
+        'channel':         sample.get('channel', ''),
     }
 
     if mode == 'dk':
@@ -168,6 +185,7 @@ def _fallback_row(sample, mode):
         'mw':              sample.get('mw'),
         'slot':            sample.get('slot'),
         'cycle_index':     sample['index'],
+        'channel':         sample.get('channel', ''),
         'ka':              np.nan,
         'kd':              np.nan,
         'Rmax':            np.nan,
