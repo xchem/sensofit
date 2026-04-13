@@ -77,12 +77,37 @@ def _fc_to_channel(fc_num: int) -> int:
     return 5 + 2 * fc_num
 
 
+def _capture_fcs(project_root: ET.Element) -> set[int]:
+    """Return the set of FC numbers that have a ``CycleType=Capture`` cycle.
+
+    These are the flow cells where ligand was actually immobilised.
+    """
+    fcs = set()
+    for cycle in project_root.findall('.//Cycle'):
+        if cycle.findtext('CycleType') != 'Capture':
+            continue
+        for sfc in cycle.findall('.//SelectableFlowCells'):
+            if sfc.findtext('Selected') != 'true':
+                continue
+            fc_el = sfc.find('FlowCell')
+            if fc_el is None:
+                continue
+            desg = fc_el.findtext('Designation', '')
+            if desg.startswith('FC'):
+                fcs.add(int(desg[2:]))
+    return fcs
+
+
 def _detect_channels(project_root: ET.Element):
     """Determine active and reference channels from ChannelReferencings.
 
     The RAPID Kinetics (Pulse) serie stores ``ChannelReferencings``
     entries whose ``ChannelDto.Id`` encodes an active/reference pair as
     ``active_ch * 100 + reference_ch`` (e.g. 907 = ch9−ch7 = FC2−FC1).
+
+    Only channels whose active flow cell had ligand immobilised (i.e. a
+    ``CycleType=Capture`` cycle with that FC selected) are returned.
+    This avoids fitting empty/control channels.
 
     Returns
     -------
@@ -92,6 +117,8 @@ def _detect_channels(project_root: ET.Element):
     """
     def _channel_to_fc(ch: int) -> int:
         return (ch - 5) // 2  # inverse of _fc_to_channel
+
+    ligand_fcs = _capture_fcs(project_root)
 
     for serie in project_root.findall('.//Serie'):
         if serie.findtext('Type') != 'Pulse':
@@ -113,6 +140,11 @@ def _detect_channels(project_root: ET.Element):
                 'reference_fc': _channel_to_fc(ref_ch),
             })
         if pairs:
+            # Filter to only channels with ligand, if Capture info exists
+            if ligand_fcs:
+                filtered = [p for p in pairs if p['active_fc'] in ligand_fcs]
+                if filtered:
+                    return filtered
             return pairs
 
     # Fallback: use the old heuristic (single channel)

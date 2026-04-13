@@ -6,8 +6,6 @@ showing compound name, ka, kd, and KD values.
 
 import os
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # non-interactive backend for batch use
 import matplotlib.pyplot as plt
 
 
