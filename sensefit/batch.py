@@ -18,7 +18,7 @@ from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
 
-def batch_fit(filepath, mode='dk', progress=True):
+def batch_fit(filepath, mode='dk', include_nsb=False, progress=True):
     """Fit all samples in a .cxw file and return a DataFrame.
 
     Parameters
@@ -29,6 +29,9 @@ def batch_fit(filepath, mode='dk', progress=True):
         Fitting mode:
         - ``'dk'``:  Direct Kinetics only (fast, ~ms/sample).
         - ``'ode'``: DK → ODE refinement (slower, ~15s/sample).
+    include_nsb : bool
+        If True, fit non-specific binders instead of skipping them.
+        They are still flagged in the ``nonspecific`` column.
     progress : bool
         Print progress to stdout.
 
@@ -63,7 +66,7 @@ def batch_fit(filepath, mode='dk', progress=True):
 
         # Check for non-specific binding before fitting
         nsb, ref_dissoc = is_nonspecific_binder(sample)
-        if nsb:
+        if nsb and not include_nsb:
             row = _fallback_row(sample, mode)
             row['fit_mode'] = 'nsb'
             row['fit_error'] = None
