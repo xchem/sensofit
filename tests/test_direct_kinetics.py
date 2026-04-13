@@ -1,4 +1,4 @@
-"""Tests for creoptix_fitting.direct_kinetics — DK linear solver."""
+"""Tests for sensefit.direct_kinetics — DK linear solver."""
 
 import sys
 import os
@@ -7,9 +7,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from creoptix_fitting.data_loader import load_cxw
-from creoptix_fitting.direct_kinetics import direct_kinetics_fit, fit_sample
-from creoptix_fitting.models import (
+from sensefit.data_loader import load_cxw
+from sensefit.direct_kinetics import direct_kinetics_fit, fit_sample
+from sensefit.models import (
     build_concentration_profile, select_dmso_cal,
     smooth_and_differentiate, build_weight_mask,
 )

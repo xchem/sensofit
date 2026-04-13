@@ -2,7 +2,7 @@
 
 ## Overview
 
-`creoptix_fitting.data_loader.load_cxw()` parses Creoptix WAVE .cxw
+`sensefit.data_loader.load_cxw()` parses Creoptix WAVE .cxw
 experiment files and returns structured Python dicts with all cycle
 metadata and signal data ready for fitting.
 

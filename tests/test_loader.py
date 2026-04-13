@@ -1,4 +1,4 @@
-"""Tests for creoptix_fitting.data_loader — load_cxw() parser."""
+"""Tests for sensefit.data_loader — load_cxw() parser."""
 
 import sys
 import os
@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from creoptix_fitting.data_loader import load_cxw
+from sensefit.data_loader import load_cxw
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
                     '20250826_DENV-2 NS2B3 Binding Assay.cxw')
