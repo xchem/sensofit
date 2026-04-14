@@ -1,4 +1,4 @@
-"""Tests for sensefit.ode_fitting — ODE refinement."""
+"""Tests for sensofit.ode_fitting — ODE refinement."""
 
 import sys
 import os
@@ -7,10 +7,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sensefit.data_loader import load_cxw
-from sensefit.ode_fitting import ode_fit, fit_sample as ode_fit_sample
-from sensefit.direct_kinetics import fit_sample as dk_fit_sample
-from sensefit.models import (
+from sensofit.data_loader import load_cxw
+from sensofit.ode_fitting import ode_fit, fit_sample as ode_fit_sample
+from sensofit.direct_kinetics import fit_sample as dk_fit_sample
+from sensofit.models import (
     select_dmso_cal, build_pulsed_concentration_profile,
     build_full_weight_mask, is_nonspecific_binder,
 )

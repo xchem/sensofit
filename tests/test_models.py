@@ -1,4 +1,4 @@
-"""Tests for sensefit.models — preprocessing and concentration profiles."""
+"""Tests for sensofit.models — preprocessing and concentration profiles."""
 
 import sys
 import os
@@ -7,8 +7,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sensefit.data_loader import load_cxw
-from sensefit.models import (
+from sensofit.data_loader import load_cxw
+from sensofit.models import (
     build_concentration_profile, build_pulsed_concentration_profile,
     select_dmso_cal, select_blank,
     double_reference, build_weight_mask, build_full_weight_mask,

@@ -1,4 +1,4 @@
-"""Tests for sensefit.batch — batch fitting and QC flagging."""
+"""Tests for sensofit.batch — batch fitting and QC flagging."""
 
 import sys
 import os
@@ -8,7 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sensefit.batch import batch_fit, flag_poor_fits
+from sensofit.batch import batch_fit, flag_poor_fits
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
                     '20250826_DENV-2 NS2B3 Binding Assay.cxw')

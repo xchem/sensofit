@@ -1,9 +1,9 @@
-"""Command-line interface for SenseFit batch processing.
+"""Command-line interface for SensoFit batch processing.
 
 Usage
 -----
-    python -m sensefit /path/to/folder --mode ode --output results/
-    python -m sensefit single_file.cxw --mode dk
+    python -m sensofit /path/to/folder --mode ode --output results/
+    python -m sensofit single_file.cxw --mode dk
 """
 
 import argparse
@@ -111,7 +111,7 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog='sensefit',
+        prog='sensofit',
         description='Batch kinetic fitting of Creoptix GCI .cxw files.',
     )
     parser.add_argument(

@@ -1,4 +1,4 @@
-"""Tests for sensefit.plotting — fit plot generation."""
+"""Tests for sensofit.plotting — fit plot generation."""
 
 import sys
 import os
@@ -8,10 +8,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sensefit.data_loader import load_cxw
-from sensefit.direct_kinetics import fit_sample as dk_fit_sample
-from sensefit.models import select_dmso_cal
-from sensefit.plotting import plot_fit, save_fit_plots, _sanitise_filename
+from sensofit.data_loader import load_cxw
+from sensofit.direct_kinetics import fit_sample as dk_fit_sample
+from sensofit.models import select_dmso_cal
+from sensofit.plotting import plot_fit, save_fit_plots, _sanitise_filename
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
                     '20250826_DENV-2 NS2B3 Binding Assay.cxw')

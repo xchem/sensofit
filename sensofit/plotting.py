@@ -1,4 +1,4 @@
-"""Plotting utilities for SenseFit kinetic fitting results.
+"""Plotting utilities for SensoFit kinetic fitting results.
 
 Generates individual data-vs-model PNG plots with an information box
 showing compound name, ka, kd, and KD values.

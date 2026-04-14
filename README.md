@@ -1,8 +1,8 @@
-# SenseFit
+# SensoFit
 
 Kinetic fitting for Creoptix GCI (Grating-Coupled Interferometry) biosensor data.
 
-SenseFit extracts 1:1 Langmuir binding kinetics (ka, kd, KD) from `.cxw` experiment files
+SensoFit extracts 1:1 Langmuir binding kinetics (ka, kd, KD) from `.cxw` experiment files
 using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, followed by
 **ODE-based refinement** with multi-start optimisation for publication-quality parameters.
 
@@ -21,8 +21,8 @@ using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, foll
 
 ```bash
 # Create a conda environment with dependencies
-conda create -n sensefit python=3.11 numpy scipy pandas h5py matplotlib
-conda activate sensefit
+conda create -n sensofit python=3.11 numpy scipy pandas h5py matplotlib
+conda activate sensofit
 ```
 
 Clone or copy this repository, then run from the project root.
@@ -32,8 +32,8 @@ Clone or copy this repository, then run from the project root.
 ### Python API
 
 ```python
-from sensefit import load_cxw, batch_fit, flag_poor_fits
-from sensefit.plotting import save_fit_plots
+from sensofit import load_cxw, batch_fit, flag_poor_fits
+from sensofit.plotting import save_fit_plots
 
 # Load and fit all samples
 df, data = batch_fit('experiment.cxw', mode='ode')
@@ -47,16 +47,16 @@ df.to_csv('results.csv', index=False)
 
 ```bash
 # Fit a single file (ODE mode, default)
-python -m sensefit experiment.cxw -o results/
+python -m sensofit experiment.cxw -o results/
 
 # Fit all .cxw files in a folder using Direct Kinetics
-python -m sensefit data_folder/ --mode dk -o results/
+python -m sensofit data_folder/ --mode dk -o results/
 
 # Run both DK and ODE fits
-python -m sensefit data_folder/ --mode both -o results/
+python -m sensofit data_folder/ --mode both -o results/
 
 # Include non-specific binders (default: skip them)
-python -m sensefit experiment.cxw --include-nsb -o results/
+python -m sensofit experiment.cxw --include-nsb -o results/
 ```
 
 **CLI output:**
@@ -83,9 +83,9 @@ python -m sensefit experiment.cxw --include-nsb -o results/
 ## Package Structure
 
 ```
-sensefit/
+sensofit/
 ├── __init__.py          # Public API: load_cxw, batch_fit, flag_poor_fits
-├── __main__.py          # CLI entry point (python -m sensefit)
+├── __main__.py          # CLI entry point (python -m sensofit)
 ├── data_loader.py       # .cxw file parser (ZIP → XML + HDF5)
 ├── models.py            # Preprocessing, concentration profiles, ODE model
 ├── direct_kinetics.py   # Fast DK fitting (dR/dt linear regression)
