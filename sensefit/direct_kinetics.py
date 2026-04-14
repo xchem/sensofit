@@ -18,7 +18,7 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 
 import numpy as np
 from .models import (build_concentration_profile, select_dmso_cal,
-                     smooth_and_differentiate, build_weight_mask,
+                     smooth_and_differentiate,
                      double_reference)
 
 
@@ -130,9 +130,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     1. Double-references the sample with the nearest preceding blank
        (falls back to next preceding blank if subtraction is negative).
     2. Constructs c(t) from the nearest DMSO cal.
-    3. Fits the dissociation phase only (Rinse→RinseEnd) using the
-       Direct Kinetics linear solver to obtain kd.
-    4. Estimates ka and Rmax from the dissociation onset and c(t).
+    3. Fits the full sensorgram (Injection→RinseEnd) using the
+       Direct Kinetics linear solver to obtain ka and kd directly.
 
     Parameters
     ----------
@@ -167,86 +166,44 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         signal_bl = sample['signal'] - baseline
         blank_index = None
 
-    # --- Smooth the dissociation phase for Direct Kinetics ---
-    # Use the dissociation-only weight mask: fit kd from clean data
-    w = build_weight_mask(t, sample['markers'])
+    # --- Full-sensorgram Direct Kinetics ---
+    # Weight the entire Injection→RinseEnd window so the DK linear solver
+    # sees both association (c > 0 → constrains ka) and dissociation (c = 0
+    # → constrains kd) data simultaneously.
+    inj_time = sample['markers'].get('Injection', t[0])
+    rinse = sample['markers'].get('Rinse', t[-1])
+    rinse_end = sample['markers'].get('RinseEnd', t[-1])
+
+    w = np.zeros_like(t)
+    w[(t >= inj_time) & (t <= rinse_end)] = 1.0
 
     R_smooth, dRdt, spline = smooth_and_differentiate(
         t, signal_bl, smoothing_factor)
     c = c_func(t)
 
-    # Direct Kinetics on dissociation only → gives kd
     result = direct_kinetics_fit(t, R_smooth, dRdt, c, w=w,
                                  lambda_reg=lambda_reg)
 
-    # --- Estimate ka and Rmax from signal shape ---
-    # kd is reliable from the dissociation fit (k3)
-    kd = result['k_vec'][2]
+    # Extract physical parameters directly from the solver
+    ka = abs(result['k_vec'][1])   # k2 = ka, enforce positive
+    kd = abs(result['k_vec'][2])   # k3 = kd, enforce positive
 
     # R0: peak binding response at dissociation onset
-    rinse = sample['markers'].get('Rinse', t[-1])
-    inj_time = sample['markers'].get('Injection', t[0])
     near_rinse = (t >= rinse - 2) & (t <= rinse)
     R0 = R_smooth[near_rinse].mean() if near_rinse.any() else R_smooth.max()
+    R0 = max(R0, 0.0)
 
-    C = sample['concentration_M']
-    ka = None
-
-    # --- Primary: estimate ka from observed association rate (kobs) ---
-    # For 1:1 Langmuir: R(t) ≈ R_eq·(1 - exp(-kobs·t))
-    # kobs = ka·c + kd  →  ka = (kobs - kd) / c
-    # Estimate kobs from time to reach 50% of R0.
-    if R0 > 0.5 and C > 0:
-        assoc_mask = (t >= inj_time) & (t <= rinse)
-        R_assoc = R_smooth[assoc_mask]
-        t_assoc = t[assoc_mask]
-        above_half = np.where(R_assoc >= 0.5 * R0)[0]
-        if len(above_half) > 0:
-            t_half = t_assoc[above_half[0]] - inj_time
-            if t_half > 0.5:
-                kobs = np.log(2) / t_half
-                if kobs > abs(kd):
-                    ka = (kobs - abs(kd)) / C
-
-    # --- Fallback: steady-state heuristic with derivative-based saturation ---
-    if ka is None or ka <= 0:
-        c_plateau = c_func(rinse - 1)
-
-        # Estimate saturation fraction from how close the signal is to
-        # equilibrium at rinse: if dR/dt ≈ 0, saturation is high (Rmax ≈ R0);
-        # if dR/dt is still large, saturation is low (Rmax >> R0).
-        # f_sat = R0 / Rmax, clamped to [0.3, 0.95].
-        if R0 > 1.0 and abs(kd) > 1e-8:
-            dRdt_near = dRdt[near_rinse].mean() if near_rinse.any() else 0.0
-            # At equilibrium: dR/dt = 0 = ka*c*(Rmax-R0) - kd*R0
-            # Departure: dR/dt = ka*c*(Rmax-R0) - kd*R0
-            # Fractional departure: η = dR/dt / (kd*R0)
-            # η = 0 → equilibrium, η > 0 → still rising (far from saturation)
-            eta = max(dRdt_near / (abs(kd) * R0), 0.0)
-            f_sat = np.clip(1.0 / (1.0 + eta), 0.3, 0.95)
-        else:
-            f_sat = 0.5  # default: assume 50% saturation
-
-        Rmax = R0 / f_sat if f_sat > 0 else R0 + 5.0
-        Rmax = max(Rmax, R0 + 1.0)  # ensure Rmax > R0
-
-        if c_plateau > 0 and abs(kd) > 0 and (Rmax - R0) > 0:
-            ka = abs(kd) * R0 / (c_plateau * (Rmax - R0))
-        else:
-            ka = 1e4
-
-    # Rmax from steady-state: R0 = Rmax · c/(c+KD) = Rmax · ka·c/(ka·c+kd)
-    # → Rmax = R0 · (ka·c + kd) / (ka·c)
-    if ka > 0 and C > 0:
-        Rmax = R0 * (ka * C + abs(kd)) / (ka * C)
+    # Rmax from solver: k1 = ka·Rmax → Rmax = k1/ka
+    if ka > 1e-30:
+        Rmax = abs(result['k_vec'][0]) / ka
+        Rmax = max(Rmax, R0 * 1.05)  # ensure Rmax >= R0
     else:
-        Rmax = max(R0 * 1.2, R0 + 5.0)
+        Rmax = max(R0 + 5.0, R0 * 1.5)
 
-    KD = abs(kd) / ka if ka > 0 else np.inf
+    KD = kd / ka if ka > 1e-30 else np.inf
 
-    # Overwrite the linear solver's unreliable ka/Rmax with these estimates
     result['ka'] = ka
-    result['kd'] = abs(kd)  # enforce positive
+    result['kd'] = kd
     result['Rmax'] = Rmax
     result['KD'] = KD
     result['Rmax_corrected'] = Rmax
