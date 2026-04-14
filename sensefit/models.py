@@ -15,6 +15,7 @@ Where:
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from scipy.integrate import solve_ivp
+from scipy.signal import savgol_filter
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +319,13 @@ def build_pulse_mask(dmso_cycle: dict, threshold_frac: float = 0.3):
 # ---------------------------------------------------------------------------
 
 def smooth_and_differentiate(t: np.ndarray, R: np.ndarray,
-                             smoothing_factor: float | None = None):
-    """Fit a smoothing spline and compute dR/dt analytically.
+                             smoothing_factor: float | None = None,
+                             window_sec: float = 2.0, polyorder: int = 3):
+    """Smooth binding signal and compute dR/dt using Savitzky-Golay filter.
+
+    Unlike a global spline, SG filtering is local — it preserves pulse
+    structure and sharp transitions in pulsed GCI data without imposing
+    a sigmoidal shape.
 
     Parameters
     ----------
@@ -328,7 +334,11 @@ def smooth_and_differentiate(t: np.ndarray, R: np.ndarray,
     R : np.ndarray
         Binding response array.
     smoothing_factor : float or None
-        Smoothing parameter for UnivariateSpline.  None = automatic (GCV).
+        Ignored (kept for API compatibility with callers that pass it).
+    window_sec : float
+        Smoothing window width in seconds (default 2.0 s).
+    polyorder : int
+        Polynomial order for the SG filter (default 3).
 
     Returns
     -------
@@ -336,13 +346,22 @@ def smooth_and_differentiate(t: np.ndarray, R: np.ndarray,
         Smoothed response.
     dRdt : np.ndarray
         Time derivative of the smoothed response.
-    spline : UnivariateSpline
-        The fitted spline object.
+    spline : None
+        Placeholder for API compatibility (no spline object).
     """
-    spline = UnivariateSpline(t, R, s=smoothing_factor)
-    R_smooth = spline(t)
-    dRdt = spline.derivative()(t)
-    return R_smooth, dRdt, spline
+    dt = np.median(np.diff(t))
+    window_len = int(round(window_sec / dt))
+    # Must be odd and >= polyorder + 2
+    if window_len % 2 == 0:
+        window_len += 1
+    window_len = max(window_len, polyorder + 2)
+
+    R_smooth = savgol_filter(R, window_length=window_len, polyorder=polyorder)
+    # SG derivative: deriv=1 gives dR/dt when delta=dt
+    dRdt = savgol_filter(R, window_length=window_len, polyorder=polyorder,
+                         deriv=1, delta=dt)
+
+    return R_smooth, dRdt, None
 
 
 # ---------------------------------------------------------------------------
