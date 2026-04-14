@@ -35,13 +35,13 @@ def _residuals(params, t_dissoc, signal_dissoc, t0):
     return signal_dissoc - R_model
 
 
-def _residuals_full(params, t, signal, c_func, w, kd_fixed):
-    """Full ODE residuals (weighted) with kd held fixed.
+def _residuals_full(params, t, signal, c_func, w):
+    """Full ODE residuals (weighted).
 
-    Optimises only (ka, Rmax); kd is pinned to the DK estimate.
+    Optimises (ka, kd, Rmax) simultaneously.
     """
-    ka, Rmax = params
-    R_sim = simulate_sensorgram(t, ka, kd_fixed, Rmax, c_func, R0=0.0)
+    ka, kd, Rmax = params
+    R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0)
     return w * (signal - R_sim)
 
 
@@ -60,7 +60,7 @@ def _solve_R0_Rss(kd, t_dissoc, signal_dissoc, t0):
 
 
 def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
-            n_starts=3, rng_seed=None, skip_s=1.0):
+            n_starts=1, rng_seed=None, skip_s=1.0):
     """Fit 1:1 Langmuir parameters via DK-seeded ODE refinement.
 
     Three-phase approach:
@@ -68,7 +68,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
          from the final dissociation phase (Rinse → RinseEnd).
          The first ``skip_s`` seconds are excluded for transport lag.
       2. Derive ka from steady-state at dissociation onset.
-      3. Multi-start ODE refinement for (ka, Rmax) with kd fixed from DK.
+      3. Multi-start ODE refinement for (ka, kd, Rmax) seeded from DK.
          Residuals are computed over the full sensorgram using ``w``
          (buffer pulses during association + final dissociation).
 
@@ -118,17 +118,17 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     else:
         ka_est = max(ka0, 1.0)
 
-    # ---- Phase 3: Multi-start ODE refinement for (ka, Rmax) ----
-    lb_full = np.array([1e-1, 1.0])
-    ub_full = np.array([1e8, 1e4])
+    # ---- Phase 3: Multi-start ODE refinement for (ka, kd and Rmax) ----
+    lb_full = np.array([1e-1, 1e-6, 1.0])
+    ub_full = np.array([1e8, 1e1, 1e4])
 
     rng = np.random.default_rng(rng_seed)
-    starts = [np.clip([ka_est, Rmax_est], lb_full, ub_full)]
-    # Also try DK's ka/Rmax as a starting point
-    starts.append(np.clip([max(ka0, 1.0), max(Rmax0, 2.0)], lb_full, ub_full))
+    starts = [np.clip([ka_est, kd_final, Rmax_est], lb_full, ub_full)]
+    # Also try DK's ka/kd/Rmax as a starting point
+    starts.append(np.clip([max(ka0, 1.0), max(kd0, 1e-5), max(Rmax0, 2.0)], lb_full, ub_full))
     for _ in range(max(n_starts - 2, 0)):
-        log_perturb = rng.normal(0, 0.5, size=2)
-        p = np.array([ka_est, Rmax_est]) * np.exp(log_perturb)
+        log_perturb = rng.normal(0, 0.5, size=3)
+        p = np.array([ka_est, kd_final, Rmax_est]) * np.exp(log_perturb)
         starts.append(np.clip(p, lb_full, ub_full))
 
     fits = []
@@ -136,7 +136,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         try:
             opt = least_squares(
                 _residuals_full, p0,
-                args=(t, signal, c_func, w, kd_final),
+                args=(t, signal, c_func, w),
                 bounds=(lb_full, ub_full),
                 method='trf',
                 ftol=1e-6, xtol=1e-6, gtol=1e-6,
@@ -156,7 +156,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
             'KD': kd_final / ka_est,
             'R0': R0_est, 'Rss': Rss_est,
             'ka_se': np.nan, 'kd_se': np.nan, 'Rmax_se': np.nan,
-            'cov': np.full((2, 2), np.nan),
+            'cov': np.full((3, 3), np.nan),
             'R_fit': R_fit,
             'residuals': w * (signal - R_fit),
             'sigma_residual': np.nan,
@@ -169,51 +169,55 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     # Median aggregation over converged ODE fits
     all_params = np.array([f[0] for f in fits])
     ka_final_val = float(np.median(all_params[:, 0]))
-    Rmax_final = float(np.median(all_params[:, 1]))
+    kd_final_val = float(np.median(all_params[:, 1]))
+    Rmax_final = float(np.median(all_params[:, 2]))
     total_nfev = sum(f[3] for f in fits)
 
     # IQR
     iqr_ka = float(np.percentile(all_params[:, 0], 75) -
                     np.percentile(all_params[:, 0], 25))
-    iqr_Rmax = float(np.percentile(all_params[:, 1], 75) -
-                      np.percentile(all_params[:, 1], 25))
+    iqr_kd = float(np.percentile(all_params[:, 1], 75) -
+                    np.percentile(all_params[:, 1], 25))
+    iqr_Rmax = float(np.percentile(all_params[:, 2], 75) -
+                      np.percentile(all_params[:, 2], 25))
 
-    KD = kd_final / ka_final_val
+    KD = kd_final_val / ka_final_val
 
     # Confidence from best Jacobian (lowest cost)
     best_idx = np.argmin([f[1] for f in fits])
     best_jac = fits[best_idx][2]
 
     residuals = _residuals_full(
-        [ka_final_val, Rmax_final], t, signal, c_func, w, kd_final)
+        [ka_final_val, kd_final_val, Rmax_final], t, signal, c_func, w)
     n = int((w > 0).sum())
-    dof = max(n - 2, 1)
+    dof = max(n - 3, 1)
     sigma2 = np.sum(residuals ** 2) / dof
 
-    ka_se, Rmax_se = np.nan, np.nan
-    cov = np.full((2, 2), np.nan)
+    ka_se, kd_se, Rmax_se = np.nan, np.nan, np.nan
+    cov = np.full((3, 3), np.nan)
     try:
         JtJ_inv = np.linalg.inv(best_jac.T @ best_jac)
         cov = sigma2 * JtJ_inv
         se = np.sqrt(np.maximum(np.diag(cov), 0.0))
-        ka_se, Rmax_se = se
+        ka_se, kd_se, Rmax_se = se
     except np.linalg.LinAlgError:
         pass
 
-    R_fit = simulate_sensorgram(t, ka_final_val, kd_final, Rmax_final,
+    R_fit = simulate_sensorgram(t, ka_final_val, kd_final_val, Rmax_final,
                                 c_func, R0=0.0)
 
     return {
         'ka': ka_final_val,
-        'kd': kd_final,
+        'kd': kd_final_val,
         'Rmax': Rmax_final,
         'KD': KD,
         'R0': R0_est,
         'Rss': Rss_est,
         'ka_se': ka_se,
-        'kd_se': np.nan,
+        'kd_se': kd_se,
         'Rmax_se': Rmax_se,
         'ka_iqr': iqr_ka,
+        'kd_iqr': iqr_kd,
         'Rmax_iqr': iqr_Rmax,
         'cov': cov,
         'R_fit': R_fit,
@@ -230,7 +234,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
 
 def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
-               smoothing_factor=None):
+               smoothing_factor=None, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
@@ -245,6 +249,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         Tikhonov regularisation for Direct Kinetics initial estimates.
     smoothing_factor : float or None
         Smoothing parameter for spline in Direct Kinetics.
+    n_starts : int
+        Number of starting points for ODE multi-start refinement.
 
     Returns
     -------
@@ -274,7 +280,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
 
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
-                  ka0=dk['ka'], kd0=dk['kd'], Rmax0=dk['Rmax'])
+                  ka0=dk['ka'], kd0=dk['kd'], Rmax0=dk['Rmax'],
+                  n_starts=n_starts)
 
     # Map R_fit back to full time grid
     R_fit_full = np.full_like(signal, np.nan)

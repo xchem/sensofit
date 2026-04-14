@@ -55,10 +55,13 @@ class TestODEFit:
                                    rtol=1e-10)
 
     def test_kd_close_to_dk(self, data, first_sample):
-        """ODE should use kd from DK (fixed), so they should match."""
+        """ODE kd should stay in the neighbourhood of the DK seed."""
         result = ode_fit_sample(first_sample, data['dmso_cals'], blanks=data['blanks'])
-        np.testing.assert_allclose(result['kd'], result['dk_kd'],
-                                   rtol=0.01)
+        # kd is now refined (not fixed), so allow up to 10x deviation
+        ratio = result['kd'] / result['dk_kd']
+        assert 0.1 < ratio < 10, (
+            f"ODE kd={result['kd']:.4g} too far from DK kd={result['dk_kd']:.4g}"
+        )
 
 
 class TestFitSample:
