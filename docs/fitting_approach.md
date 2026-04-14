@@ -242,46 +242,51 @@ This provides a physics-informed starting point for optimisation.
 
 #### Phase 3: Multi-Start TRF Optimisation
 
-Optimise $(k_a, R_{max})$ while holding $k_d$ fixed. The cost function is:
+Optimise $(k_a, k_d, R_{max})$ simultaneously, seeded from DK estimates.
+The cost function is:
 
 $$
-\min_{k_a, R_{max}} \sum_i w_i \cdot \left( R_i^{obs} - R_i^{sim}(k_a, k_d, R_{max}) \right)^2
+\min_{k_a, k_d, R_{max}} \sum_i w_i \cdot \left( R_i^{obs} - R_i^{sim}(k_a, k_d, R_{max}) \right)^2
 $$
 
 where $R^{sim}$ is obtained by integrating the Langmuir ODE with pulsed c(t)
 using `scipy.integrate.solve_ivp` (RK45, rtol=1e-8).
 
-**Multi-start protocol:**
-- Start 1: Phase 2 estimates
-- Start 2: DK estimates
+**Multi-start protocol** (controlled by `n_starts`, default 3):
+- Start 1: Phase 2 estimates (ka, kd from DK, Rmax)
+- Start 2: DK estimates directly
 - Starts 3+: Log-normal perturbations of Phase 2 estimates (σ=0.5 in log-space)
 
+Use `n_starts=1` for fast screening; increase (e.g. 10–20) for robust estimates.
+
 Each start is optimised with `scipy.optimize.least_squares` (TRF method,
-bounded: $k_a \in [0.1, 10^8]$, $R_{max} \in [1, 10^4]$).
+bounded: $k_a \in [0.1, 10^8]$, $k_d \in [10^{-6}, 10]$, $R_{max} \in [1, 10^4]$).
 
 **Aggregation:** Take the *median* of all converged parameter sets. This is
 more robust than taking the best cost, since the cost surface can have
 shallow local minima that give similar costs but different parameters.
 
-### Why Fix kd?
+### Why Refine kd in the ODE?
 
-$k_d$ is well-determined from the dissociation phase alone (where $c = 0$,
-the ODE has an exact exponential solution). Allowing $k_d$ to vary in the
-full ODE fit introduces unnecessary degrees of freedom and can lead to
-parameter coupling artefacts. The DK estimate of $k_d$ is typically very
-accurate.
+The DK estimate of $k_d$ provides a reliable starting point from the
+dissociation phase (where $c = 0$ and the ODE has an exact exponential
+solution). However, refining $k_d$ jointly with $k_a$ and $R_{max}$ in the
+full ODE fit allows the optimizer to account for the interplay between
+association and dissociation kinetics across the entire sensorgram,
+potentially improving accuracy. The DK seed keeps the optimizer in the
+right region of parameter space.
 
 ### Standard Errors
 
 Asymptotic standard errors are computed from the best Jacobian:
 
 $$
-\text{Cov}(k_a, R_{max}) = \hat{\sigma}^2 \cdot (\mathbf{J}^T \mathbf{J})^{-1}
+\text{Cov}(k_a, k_d, R_{max}) = \hat{\sigma}^2 \cdot (\mathbf{J}^T \mathbf{J})^{-1}
 $$
 
-where $\hat{\sigma}^2 = \sum r_i^2 / (n - 2)$ is the residual variance.
+where $\hat{\sigma}^2 = \sum r_i^2 / (n - 3)$ is the residual variance.
 
-**Implementation:** `ode_fitting.ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0)`
+**Implementation:** `ode_fitting.ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0, n_starts=3)`
 
 ---
 

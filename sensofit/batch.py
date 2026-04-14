@@ -19,7 +19,7 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 
 def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
-              progress=True):
+              progress=True, n_starts=3):
     """Fit all samples in a .cxw file and return a DataFrame.
 
     Parameters
@@ -39,6 +39,9 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
         - A list of FC numbers, e.g. ``[2]``: only that channel.
     progress : bool
         Print progress to stdout.
+    n_starts : int
+        Number of starting points for ODE multi-start refinement.
+        Ignored when mode='dk'.
 
     Returns
     -------
@@ -92,7 +95,10 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
             continue
 
         try:
-            result = fit_func(sample, ch_dmso, blanks=ch_blanks)
+            kwargs = {'blanks': ch_blanks}
+            if mode == 'ode':
+                kwargs['n_starts'] = n_starts
+            result = fit_func(sample, ch_dmso, **kwargs)
             row = _extract_row(sample, result, mode)
             row['fit_error'] = None
         except Exception as e:

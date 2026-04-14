@@ -39,6 +39,9 @@ from sensofit.plotting import save_fit_plots
 df, data = batch_fit('experiment.cxw', mode='ode')
 df = flag_poor_fits(df)
 
+# Or with more starting points for robust estimates
+df, data = batch_fit('experiment.cxw', mode='ode', n_starts=10)
+
 # Save results
 df.to_csv('results.csv', index=False)
 ```
@@ -108,6 +111,6 @@ sensofit/
 
 1. **Direct Kinetics**: Linearise the 1:1 Langmuir ODE as dR/dt = k₁·c·Rmax - (k₁·c + k₃)·R, solve by weighted least squares on the dissociation phase to get kd, then estimate ka from association kinetics.
 
-2. **ODE Refinement**: Use DK estimates as seeds for multi-start `scipy.optimize.least_squares` (TRF) against the full numerical ODE solution. The fit window is trimmed to [Injection, RinseEnd + margin] to exclude baseline artefacts.
+2. **ODE Refinement**: Use DK estimates as seeds for multi-start `scipy.optimize.least_squares` (TRF) against the full numerical ODE solution. The number of random starts is controlled by `n_starts` (default 3; use 1 for fast screening, 10–20 for robust estimates). The fit window is trimmed to [Injection, RinseEnd + margin] to exclude baseline artefacts.
 
 See [docs/fitting_approach.md](docs/fitting_approach.md) for details.
