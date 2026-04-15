@@ -21,11 +21,13 @@ using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, foll
 
 ```bash
 # Create a conda environment with dependencies
-conda create -n sensofit python=3.11 numpy scipy pandas h5py matplotlib
+conda create -n sensofit python=3.11
 conda activate sensofit
 ```
-
-Clone or copy this repository, then run from the project root.
+Clone/copy this repository, cd to the root, then install the package using the following command:
+```bash
+pip install -e .
+``` 
 
 ## Quick Start
 
