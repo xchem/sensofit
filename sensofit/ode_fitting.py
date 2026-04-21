@@ -234,7 +234,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
 
 def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
-               smoothing_factor=None, n_starts=1):
+               smoothing_factor=None, neg_ss_correction=False, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
@@ -249,6 +249,9 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         Tikhonov regularisation for Direct Kinetics initial estimates.
     smoothing_factor : float or None
         Smoothing parameter for spline in Direct Kinetics.
+    neg_ss_correction : bool
+        If True, apply a correction to the signal to ensure non-negative
+        steady-state response during last dissociation (Rinse → RinseEnd).
     n_starts : int
         Number of starting points for ODE multi-start refinement.
 
@@ -277,6 +280,10 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     # Trim to active fitting window (Injection → RinseEnd + margin)
     t_fit, sig_fit, w_fit, fit_mask = trim_to_fit_window(
         t, signal, w, sample['markers'])
+    if neg_ss_correction:
+        last_diss_mask = (t_fit >= sample['markers'].get('Rinse', 0)) & (t_fit <= sample['markers'].get('RinseEnd', t[-1]))
+        min_diss = sig_fit[last_diss_mask].min() if sig_fit[last_diss_mask].min() < 0 else 0.0
+        sig_fit -= min_diss
 
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
@@ -303,6 +310,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     ode['R0_dissoc'] = dk['R0_dissoc']
     ode['t'] = t
     ode['signal'] = signal
+    if neg_ss_correction:
+        ode['signal'] -= min_diss
     ode['c_raw'] = dk['c_raw']
     ode['dmso_index'] = dk['dmso_index']
     ode['blank_index'] = dk['blank_index']
