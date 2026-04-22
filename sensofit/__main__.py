@@ -60,18 +60,18 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
     samples = data['samples']
     dmso_cals = data['dmso_cals']
     blanks = data['blanks']
-    results = []
+    matched_results = []
     for _, row in df.iterrows():
         idx = row.get('cycle_index')
         ch = row.get('channel', '')
         match = [s for s in samples
                  if s['index'] == idx and s.get('channel', '') == ch]
         if not match:
-            results.append(None)
+            matched_results.append(None)
             continue
         sample = match[0]
         if row.get('nonspecific', False) or not row.get('success', False):
-            results.append(None)
+            matched_results.append(None)
         else:
             try:
                 if mode == 'dk':
@@ -83,9 +83,9 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
                 ch_blanks = [b for b in blanks if b.get('channel') == ch]
                 result = fit_fn(sample, ch_dmso or dmso_cals,
                                 blanks=ch_blanks or blanks)
-                results.append(result)
+                matched_results.append(result)
             except Exception:
-                results.append(None)
+                matched_results.append(None)
 
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
     matched_samples = []
