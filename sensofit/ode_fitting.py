@@ -234,7 +234,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
 
 def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
-               smoothing_factor=None, neg_ss_correction=False, n_starts=1):
+               smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
@@ -275,7 +275,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         dmso, sample['concentration_M'])
 
     # Full weight mask: buffer pulses during association + dissociation
-    w = build_full_weight_mask(t, sample['markers'], dmso)
+    assert 0 <= association_weight <= 1.0, "association_weight value must be between 0 and 1."
+    w = build_full_weight_mask(t, sample['markers'], dmso, association_weight=association_weight)
 
     # Trim to active fitting window (Injection → RinseEnd + margin)
     t_fit, sig_fit, w_fit, fit_mask = trim_to_fit_window(
