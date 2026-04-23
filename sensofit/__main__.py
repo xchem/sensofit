@@ -16,6 +16,7 @@ import pandas as pd
 
 from .batch import batch_fit, flag_poor_fits
 from .plotting import save_fit_plots
+from .dataexporter import export_package
 
 
 def _find_cxw_files(path):
@@ -109,10 +110,64 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
     return df
 
 
+def _expand_cxw_inputs(paths):
+    """Expand a list of file/dir paths into a flat sorted list of .cxw files."""
+    out = []
+    for p in paths:
+        if os.path.isfile(p) and p.lower().endswith('.cxw'):
+            out.append(p)
+        elif os.path.isdir(p):
+            out.extend(sorted(glob.glob(os.path.join(p, '*.cxw'))))
+        else:
+            print(f'Skipping {p}: not a .cxw file or directory',
+                  file=sys.stderr)
+    return out
+
+
+def _run_export(argv):
+    parser = argparse.ArgumentParser(
+        prog='sensofit export',
+        description='Package raw .cxw signal data into a self-describing zip '
+                    'for data dissemination.',
+    )
+    parser.add_argument('paths', nargs='+',
+                        help='One or more .cxw files or directories.')
+    parser.add_argument('--output', '-o', default=None,
+                        help='Output .zip path. Default: '
+                             'sensofit_package_{timestamp}.zip')
+    parser.add_argument('--name', default=None,
+                        help='Package name (used in README and as the top-'
+                             'level folder inside the zip).')
+    args = parser.parse_args(argv)
+
+    cxw_files = _expand_cxw_inputs(args.paths)
+    if not cxw_files:
+        print('No .cxw files found.', file=sys.stderr)
+        sys.exit(1)
+
+    output = args.output
+    if output is None:
+        ts = time.strftime('%Y%m%d_%H%M%S')
+        output = f'sensofit_package_{ts}.zip'
+
+    print(f'Exporting {len(cxw_files)} .cxw file(s)...')
+    for f in cxw_files:
+        print(f'  - {os.path.basename(f)}')
+    out_path = export_package(cxw_files, output, package_name=args.name)
+    print(f'Wrote package: {out_path}')
+
+
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == 'export':
+        _run_export(argv[1:])
+        return
+
     parser = argparse.ArgumentParser(
         prog='sensofit',
-        description='Batch kinetic fitting of Creoptix GCI .cxw files.',
+        description='Batch kinetic fitting of Creoptix GCI .cxw files. '
+                    'Use `sensofit export ...` to package raw data instead.',
     )
     parser.add_argument(
         'input',
