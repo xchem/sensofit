@@ -48,6 +48,10 @@ df.to_csv('results.csv', index=False)
 
 ### Command Line
 
+The CLI has two modes: **batch fitting** (default) and **data export** (`export` subcommand).
+
+#### Batch fitting
+
 ```bash
 # Fit a single file (ODE mode, default)
 python -m sensofit experiment.cxw -o results/
@@ -60,11 +64,39 @@ python -m sensofit data_folder/ --mode both -o results/
 
 # Include non-specific binders (default: skip them)
 python -m sensofit experiment.cxw --include-nsb -o results/
+
+# Restrict to specific active flow cells
+python -m sensofit experiment.cxw --channels 2 3 -o results/
 ```
 
-**CLI output:**
+**Outputs:**
 - `results/batch_results.csv` — all fits with source file, cycle number, sample ID, ka, kd, KD, and quality flags
 - `results/<filename>_<mode>_plots/` — individual PNG plots per sample
+
+#### Data export (dissemination package)
+
+Package raw signal data from one or more `.cxw` files into a self-describing zip
+(per-CXW folders → per-cycle folders → one CSV per `FCx-FCy` channel pair, plus
+`metadata.json` sidecars, `experiment.json`, and an auto-generated `README.md`).
+
+```bash
+# Single file → auto-named zip (sensofit_package_<timestamp>.zip)
+python -m sensofit export experiment.cxw
+
+# Multiple files / directories → custom output zip and package name
+python -m sensofit export file1.cxw file2.cxw data_folder/ \
+    -o /tmp/my_dataset.zip --name my_dataset
+```
+
+Equivalent Python API:
+
+```python
+from sensofit import export_package
+
+export_package(['file1.cxw', 'file2.cxw'],
+               '/tmp/my_dataset.zip',
+               package_name='my_dataset')
+```
 
 ### CSV columns
 
@@ -87,14 +119,15 @@ python -m sensofit experiment.cxw --include-nsb -o results/
 
 ```
 sensofit/
-├── __init__.py          # Public API: load_cxw, batch_fit, flag_poor_fits
-├── __main__.py          # CLI entry point (python -m sensofit)
+├── __init__.py          # Public API: load_cxw, batch_fit, flag_poor_fits, export_package
+├── __main__.py          # CLI entry point (python -m sensofit [export])
 ├── data_loader.py       # .cxw file parser (ZIP → XML + HDF5)
 ├── models.py            # Preprocessing, concentration profiles, ODE model
 ├── direct_kinetics.py   # Fast DK fitting (dR/dt linear regression)
 ├── ode_fitting.py       # Full ODE fitting (DK → multi-start TRF)
 ├── batch.py             # Batch processing and quality flagging
-└── plotting.py          # Data-vs-model fit plots
+├── plotting.py          # Data-vs-model fit plots
+└── dataexporter.py      # Package raw .cxw data into a self-describing zip
 ```
 
 ## Notebooks
