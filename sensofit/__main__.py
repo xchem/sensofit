@@ -44,7 +44,9 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
 
     df, data = batch_fit(filepath, mode=mode, include_nsb=not skip_nsb,
                          channels=channels, progress=True)
-
+    if df.empty:
+        return df
+    
     # Add source file info
     df.insert(0, 'source_file', os.path.basename(filepath))
 
@@ -101,8 +103,8 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
             matched_samples.append({'compound': 'Unknown', 'concentration_M': 0,
                                     'index': idx, 'channel': ch})
 
-    if matched_results:
-        paths = save_fit_plots(matched_results, matched_samples,
+    if results:
+        paths = save_fit_plots(results, matched_samples,
                                plot_dir, mode=mode)
         n_plots = sum(1 for p in paths if p is not None)
         print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
@@ -207,6 +209,8 @@ def main(argv=None):
         for mode in modes:
             df = _run_mode(filepath, mode, skip_nsb, args.output,
                           channels=channels)
+            if df.empty:
+                continue
             all_dfs.append(df)
 
     # Combine and save

@@ -398,7 +398,7 @@ def build_weight_mask(t: np.ndarray, markers: dict) -> np.ndarray:
 
 
 def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
-                           dmso_cycle: dict) -> np.ndarray:
+                           dmso_cycle: dict, association_weight: float = 0.0) -> np.ndarray:
     """Weight mask using buffer pulses during association + full dissociation.
 
     During pulsed GCI injection, RI bulk artifacts contaminate the signal
@@ -446,6 +446,9 @@ def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
     w[inj_mask & is_buffer_sample] = 1.0
     # Full dissociation window
     w[(t >= rinse_time) & (t <= rinse_end)] = 1.0
+
+    if association_weight > 0:
+        w[(w != 1) & inj_mask] = association_weight
 
     return w
 
