@@ -405,6 +405,16 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'issues are very welcome at '
                  '<https://github.com/xchem/sensofit>.')
     lines.append('')
+    lines.append('**Re-ingesting this package.** This data package can be '
+                 'fed straight back into SensoFit — no `.cxw` file needed. '
+                 'Use `sensofit.load_package(path)` (or the dispatcher '
+                 '`sensofit.load_experiment(path)`) on either the `.zip` '
+                 'or its unzipped directory; the returned dict matches '
+                 '`sensofit.load_cxw(...)` so all batch / fitting / '
+                 'plotting helpers work unchanged. The CLI also accepts '
+                 'the `.zip` directly: `python -m sensofit package.zip '
+                 '--mode dk`.')
+    lines.append('')
     lines.append('**CEDRIC TODO NOTEBOOKS:** add list of URLS and notebooks for exploring the data')
     lines.append('')
     lines.append(f'- **Generated:** {now}')

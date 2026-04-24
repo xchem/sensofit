@@ -4,6 +4,7 @@ Usage
 -----
     python -m sensofit /path/to/folder --mode ode --output results/
     python -m sensofit single_file.cxw --mode dk
+    python -m sensofit data_package.zip --mode dk
 """
 
 import argparse
@@ -20,16 +21,32 @@ from .dataexporter import export_package
 
 
 def _find_cxw_files(path):
-    """Return list of .cxw files from a path (file or directory)."""
-    if os.path.isfile(path) and path.lower().endswith('.cxw'):
-        return [path]
+    """Return a list of inputs from a path.
+
+    Accepted inputs:
+    - A single ``.cxw`` file.
+    - A single ``.zip`` SensoFit data package.
+    - A directory containing one or more of the above (``.cxw`` files
+      take precedence; if none are found, the directory is itself
+      treated as an unzipped SensoFit package).
+    """
+    if os.path.isfile(path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ('.cxw', '.zip'):
+            return [path]
+        print(f'{path} is not a .cxw or .zip file', file=sys.stderr)
+        sys.exit(1)
     if os.path.isdir(path):
-        files = sorted(glob.glob(os.path.join(path, '*.cxw')))
-        if not files:
-            print(f'No .cxw files found in {path}', file=sys.stderr)
-            sys.exit(1)
-        return files
-    print(f'{path} is not a .cxw file or directory', file=sys.stderr)
+        cxws = sorted(glob.glob(os.path.join(path, '*.cxw')))
+        zips = sorted(glob.glob(os.path.join(path, '*.zip')))
+        if cxws or zips:
+            return cxws + zips
+        # Treat the directory itself as an unzipped data package.
+        if os.path.exists(os.path.join(path, 'README.md')):
+            return [path]
+        print(f'No .cxw or .zip files found in {path}', file=sys.stderr)
+        sys.exit(1)
+    print(f'{path} is not a .cxw/.zip file or directory', file=sys.stderr)
     sys.exit(1)
 
 
@@ -166,12 +183,15 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(
         prog='sensofit',
-        description='Batch kinetic fitting of Creoptix GCI .cxw files. '
-                    'Use `sensofit export ...` to package raw data instead.',
+        description='Batch kinetic fitting of Creoptix GCI .cxw files or '
+                    'exported SensoFit data packages (.zip / unzipped '
+                    'directory). Use `sensofit export ...` to package '
+                    'raw data instead.',
     )
     parser.add_argument(
         'input',
-        help='Path to a .cxw file or a directory containing .cxw files.',
+        help='Path to a .cxw file, a SensoFit data package (.zip or '
+             'directory), or a directory containing any of these.',
     )
     parser.add_argument(
         '--mode', choices=['dk', 'ode', 'both'], default='ode',
