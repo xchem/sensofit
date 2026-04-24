@@ -97,18 +97,19 @@ class TestRoundTripShape:
         assert len(loaded['samples']) == len(ref_with_evals['samples'])
         assert len(loaded['dmso_cals']) == len(ref_with_evals['dmso_cals'])
         assert len(loaded['blanks']) == len(ref_with_evals['blanks'])
-        # The package only carries cycles with signal data exported
-        # (Sample / ControlSample / DMSO Cal. / Blank). Non-data cycles
-        # like priming / regeneration are intentionally not stored, so
-        # `all_cycles` is the union of those four buckets.
-        expected = (len(ref_with_evals['samples'])
-                    + len(ref_with_evals['dmso_cals'])
-                    + len(ref_with_evals['blanks']))
-        # Channel-duplicates collapse: each cycle appears once in
-        # all_cycles regardless of how many channels were exported.
-        n_channels = len(loaded['config']['channel_pairs'])
-        assert len(loaded['all_cycles']) * n_channels == expected or \
-            len(loaded['all_cycles']) == expected // max(1, n_channels)
+        assert len(loaded['other_cycles']) == \
+            len(ref_with_evals['other_cycles'])
+        # all_cycles in load_cxw includes metadata-only entries
+        # (e.g. some priming cycles with no HDF5 data); the package
+        # only retains cycles that actually have signal CSVs, so its
+        # all_cycles equals the union of the four buckets divided by
+        # the number of channels.
+        n_chan = len(loaded['config']['channel_pairs'])
+        loaded_cycle_units = (len(loaded['samples'])
+                              + len(loaded['dmso_cals'])
+                              + len(loaded['blanks'])
+                              + len(loaded['other_cycles']))
+        assert len(loaded['all_cycles']) * n_chan == loaded_cycle_units
 
     def test_config_round_trips(self, pkg_with_evals, ref_with_evals):
         loaded = load_package(pkg_with_evals)
@@ -216,6 +217,37 @@ class TestEvaluations:
             assert le['active_fc'] == re['active_fc']
             assert le['reference_fc'] == re['reference_fc']
             assert le['compound'] == re['compound']
+
+
+# ---------------------------------------------------------------------------
+# Non-fitting (priming / conditioning / regeneration) round-trip
+# ---------------------------------------------------------------------------
+
+class TestOtherCycles:
+    def test_other_cycles_present(self, ref_with_evals):
+        # The EV71-2A binding assay contains regeneration cycles; if
+        # this assertion ever fires, pick a different fixture CXW.
+        assert len(ref_with_evals['other_cycles']) > 0
+
+    def test_other_cycles_round_trip_count(self, pkg_with_evals,
+                                            ref_with_evals):
+        loaded = load_package(pkg_with_evals)
+        assert len(loaded['other_cycles']) == \
+            len(ref_with_evals['other_cycles'])
+
+    def test_other_cycles_signals_round_trip(self, pkg_with_evals,
+                                              ref_with_evals):
+        loaded = load_package(pkg_with_evals)
+        l_idx = _by_key(loaded['other_cycles'])
+        for s in ref_with_evals['other_cycles']:
+            ls = l_idx[(s['index'], s.get('channel', ''))]
+            np.testing.assert_allclose(ls['signal'], s['signal'],
+                                        rtol=SIG_RTOL, atol=SIG_ATOL)
+            assert ls['cycle_type'] == s['cycle_type']
+            # Non-fitting cycle_types should not collide with the four
+            # fitting buckets.
+            assert ls['cycle_type'] not in (
+                'Sample', 'ControlSample', 'DMSO Cal.', 'Blank')
 
 
 # ---------------------------------------------------------------------------

@@ -325,8 +325,8 @@ def load_package(path: str, name: str | None = None,
     dict
         Keys: ``config``, ``project``, ``instrument``, ``buffers``,
         ``autosampler``, ``immobilization``, ``report_points``,
-        ``samples``, ``dmso_cals``, ``blanks``, ``all_cycles``,
-        ``evaluations``.
+        ``samples``, ``dmso_cals``, ``blanks``, ``other_cycles``,
+        ``all_cycles``, ``evaluations``.
     """
     with _PackageSource(path) as src:
         exps = _experiment_dirs(src)
@@ -370,6 +370,7 @@ def load_package(path: str, name: str | None = None,
         samples = []
         dmso_cals = []
         blanks = []
+        other_cycles = []
 
         cycle_dirs = sorted(d for d in src.list_subdirs(exp_dir)
                             if src.exists(f'{exp_dir}/{d}/metadata.json'))
@@ -389,8 +390,6 @@ def load_package(path: str, name: str | None = None,
             all_cycles.append(cyc)
 
             ct = cyc.get('cycle_type', '')
-            if ct not in ('Sample', 'ControlSample', 'DMSO Cal.', 'Blank'):
-                continue
 
             for label in sorted(meta.get('channels') or []):
                 if label not in wanted_labels:
@@ -412,6 +411,8 @@ def load_package(path: str, name: str | None = None,
                     dmso_cals.append(entry)
                 elif ct == 'Blank':
                     blanks.append(entry)
+                else:
+                    other_cycles.append(entry)
 
         evaluations = _evaluations_from_csv(src, exp_dir)
 
@@ -426,6 +427,7 @@ def load_package(path: str, name: str | None = None,
             'samples': samples,
             'dmso_cals': dmso_cals,
             'blanks': blanks,
+            'other_cycles': other_cycles,
             'all_cycles': all_cycles,
             'evaluations': evaluations,
         }
