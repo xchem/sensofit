@@ -160,3 +160,35 @@ class TestExportPackage:
     def test_export_package_requires_input(self, tmp_path):
         with pytest.raises(ValueError):
             export_package([], str(tmp_path / 'empty.zip'))
+
+
+@pytest.mark.skipif(not os.path.isfile(CXW),
+                    reason='Sample .cxw not present')
+class TestNonFittingCycles:
+    """Priming / Conditioning / Regeneration cycles must be exported
+    too — their raw signal CSVs and metadata, but no kinetics.json."""
+
+    def test_non_fitting_folder_exists(self, tmp_path):
+        summary = export_cxw(CXW, str(tmp_path))
+        nf = [c for c in summary['cycles']
+              if c['cycle_type'] not in ('Sample', 'ControlSample',
+                                          'DMSO Cal.', 'Blank')]
+        assert nf, 'expected at least one non-fitting cycle'
+        cyc = nf[0]
+        cyc_dir = tmp_path / summary['cxw_folder'] / cyc['folder']
+        assert (cyc_dir / 'metadata.json').is_file()
+        # No kinetics.json for non-fitting cycles.
+        assert not (cyc_dir / 'kinetics.json').exists()
+        # At least one signal CSV present.
+        for ch in cyc['channels']:
+            assert (cyc_dir / f'{_sanitize(ch)}.csv').is_file()
+
+    def test_folder_label_uses_cycle_type(self, tmp_path):
+        summary = export_cxw(CXW, str(tmp_path))
+        nf = [c for c in summary['cycles']
+              if c['cycle_type'] not in ('Sample', 'ControlSample',
+                                          'DMSO Cal.', 'Blank')]
+        for cyc in nf:
+            # Sanitised cycle_type should appear in the folder name,
+            # and the misleading inherited well "compound" must not.
+            assert _sanitize(cyc['cycle_type']) in cyc['folder']

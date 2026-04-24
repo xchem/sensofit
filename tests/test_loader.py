@@ -119,3 +119,19 @@ class TestAllCycles:
     def test_indices_unique(self, data):
         indices = [c['index'] for c in data['all_cycles']]
         assert len(indices) == len(set(indices))
+
+
+class TestOtherCycles:
+    def test_other_cycles_key_exists(self, data):
+        assert 'other_cycles' in data
+        assert isinstance(data['other_cycles'], list)
+
+    def test_other_cycles_have_signal_data(self, data):
+        # If any non-fitting cycle was loaded, it must carry the same
+        # signal arrays as samples / blanks / dmso_cals.
+        for c in data['other_cycles']:
+            assert c['cycle_type'] not in (
+                'Sample', 'ControlSample', 'DMSO Cal.', 'Blank')
+            for k in ('time', 'signal', 'raw_active', 'raw_reference',
+                      'channel'):
+                assert k in c

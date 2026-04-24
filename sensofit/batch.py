@@ -13,6 +13,7 @@ import time
 import numpy as np
 import pandas as pd
 from .data_loader import load_cxw
+from .package_loader import load_experiment
 from .models import is_nonspecific_binder
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
@@ -20,12 +21,17 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
               progress=True, n_starts=3):
-    """Fit all samples in a .cxw file and return a DataFrame.
+    """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
     ----------
     filepath : str
-        Path to the .cxw experiment file.
+        Path to a ``.cxw`` experiment file, **or** to an exported
+        SensoFit data package (a ``.zip`` produced by
+        :func:`sensofit.dataexporter.export_package`, or an unzipped
+        package directory).  The dispatcher
+        :func:`sensofit.package_loader.load_experiment` picks the right
+        loader by extension.
     mode : {'dk', 'ode'}
         Fitting mode:
         - ``'dk'``:  Direct Kinetics only (fast, ~ms/sample).
@@ -48,9 +54,9 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     df : pd.DataFrame
         One row per sample per channel with kinetic parameters and metadata.
     data : dict
-        Raw data from ``load_cxw()`` for downstream use.
+        Raw data dict (same shape as :func:`load_cxw`) for downstream use.
     """
-    data = load_cxw(filepath, channels=channels)
+    data = load_experiment(filepath, channels=channels)
     samples = data['samples']
     dmso_cals = data['dmso_cals']
     blanks = data['blanks']
