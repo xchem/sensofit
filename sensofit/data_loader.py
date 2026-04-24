@@ -558,8 +558,122 @@ def _extract_report_points(rk_serie: ET.Element) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# HDF5 data loading
+# Kinetic fit results (Evaluations/*.cx3)
 # ---------------------------------------------------------------------------
+
+_EVAL_CHANNEL_RE = re.compile(r'\(Ch\s*(\d+)\s*-\s*(\d+)\)')
+
+
+def _to_float(s):
+    if s is None:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_evaluations(zf: zipfile.ZipFile) -> list:
+    """Parse all ``Evaluations/*.cx3`` kinetic-fit results.
+
+    Each evaluation file describes a single (cycle, channel) 1:1 fit.
+    The CXW carries:
+
+    - ``<KForward>``   → ka  (M⁻¹ s⁻¹), with ``<StdErr>`` (absolute)
+    - ``<KBackwards>`` → kd  (s⁻¹),     with ``<StdErr>`` (absolute)
+    - ``<Parameter Name="Rmax">`` → Rmax (pg/mm²)
+    - root ``<Chi2>/<Value>`` → sqrt(Chi²) (pg/mm²)
+    - ``<UserComment>`` → free-text annotation
+    - ``<CycleSelector>/<CycleIndex>`` → 1-based cycle number
+    - ``<CycleSelections>/<BioModelFit>/<CycleId>`` → project cycle GUID
+    - ``<Name>`` → e.g. ``'ASAP-0044118-001 -  (Ch 3-1) - 1:1'``,
+      from which the channel pair (active / reference FC) is extracted.
+
+    KD = kd / ka is computed.  Errors are passed through verbatim as
+    reported by the instrument software (no conversion to % or CI).
+
+    Returns
+    -------
+    list[dict]  (empty list if the CXW has no Evaluations folder)
+    """
+    out = []
+    eval_files = [n for n in zf.namelist() if n.startswith('Evaluations/')
+                  and n.endswith('.cx3')]
+    for fname in eval_files:
+        try:
+            root = _parse_xml(zf, fname)
+        except ET.ParseError:
+            continue
+        if root.tag != 'EvaluationBase':
+            continue
+
+        name = root.findtext('Name', '') or ''
+        comment = root.findtext('UserComment', '') or ''
+
+        # Channel pair from the name string
+        m = _EVAL_CHANNEL_RE.search(name)
+        if m:
+            active_fc = int(m.group(1))
+            reference_fc = int(m.group(2))
+            channel_label = f'FC{active_fc}-FC{reference_fc}'
+            channel_str = f'Ch {active_fc}-{reference_fc}'
+        else:
+            active_fc = reference_fc = None
+            channel_label = ''
+            channel_str = ''
+
+        cyc_idx_s = root.findtext('CycleSelector/CycleIndex')
+        try:
+            cycle_index = int(cyc_idx_s) if cyc_idx_s else None
+        except ValueError:
+            cycle_index = None
+        analyte = root.findtext('CycleSelector/Analyte', '') or ''
+        cycle_guid = root.findtext(
+            './/CycleSelections/BioModelFit/CycleId', '') or ''
+
+        # Walk components — params keyed by their <Name> child
+        ka = ka_err = kd = kd_err = rmax = rmax_err = None
+        for el in root.iter():
+            nm = el.findtext('Name')
+            if not nm:
+                continue
+            nm = nm.strip()
+            if nm == 'ka':
+                ka = _to_float(el.findtext('Value'))
+                ka_err = _to_float(el.findtext('StdErr'))
+            elif nm == 'kd':
+                kd = _to_float(el.findtext('Value'))
+                kd_err = _to_float(el.findtext('StdErr'))
+            elif nm == 'Rmax':
+                rmax = _to_float(el.findtext('Value'))
+                rmax_err = _to_float(el.findtext('StdErr'))
+
+        chi_el = root.find('.//Chi2')
+        sqrt_chi2 = _to_float(chi_el.findtext('Value')) if chi_el is not None else None
+
+        KD = (kd / ka) if (ka not in (None, 0.0) and kd is not None) else None
+
+        out.append({
+            'cycle_index': cycle_index,
+            'cycle_guid': cycle_guid,
+            'compound': analyte,
+            'channel': channel_label,         # FC2-FC1
+            'channel_str': channel_str,       # Ch 2-1
+            'active_fc': active_fc,
+            'reference_fc': reference_fc,
+            'ka': ka,
+            'ka_error': ka_err,
+            'kd': kd,
+            'kd_error': kd_err,
+            'KD': KD,
+            'Rmax': rmax,
+            'Rmax_error': rmax_err,
+            'sqrt_chi2': sqrt_chi2,
+            'comment': comment.strip(),
+            'name': name,
+            'eval_file': fname,
+        })
+    return out
 
 def _load_cycle_data(h5f: h5py.File, guid: str, active_ch: int, reference_ch: int):
     """Load time, active, and reference signals for one cycle.
@@ -664,6 +778,9 @@ def load_cxw(filepath: str, channels='all') -> dict:
         # Cycle metadata (with autosampler enrichment)
         all_cycles = _extract_cycles(rk_serie, reagent_lookup, as_lookup)
 
+        # Kinetic fit results (Evaluations/*.cx3) — empty list if absent
+        evaluations = _extract_evaluations(zf)
+
         # Load HDF5 data
         h5_bytes = zf.read('cyclesData.h5')
 
@@ -719,4 +836,5 @@ def load_cxw(filepath: str, channels='all') -> dict:
         'dmso_cals': dmso_cals,
         'blanks': blanks,
         'all_cycles': all_cycles,
+        'evaluations': evaluations,
     }

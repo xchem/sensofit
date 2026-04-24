@@ -182,6 +182,143 @@ def _cycle_metadata(meta: dict, channels: list) -> dict:
     }
 
 
+def _build_eval_lookup(evaluations: list) -> dict:
+    """Index evaluations by ``(cycle_index, channel_label)``.
+
+    There can in principle be more than one evaluation per
+    ``(cycle, channel)`` (e.g. a re-fit).  We keep the *last* one
+    encountered, matching the way the WAVEcontrol UI shows the most
+    recent evaluation.
+    """
+    out: dict = {}
+    for e in evaluations or []:
+        key = (e.get('cycle_index'), e.get('channel'))
+        if key[0] is None or not key[1]:
+            continue
+        out[key] = e
+    return out
+
+
+_NA = 'not available'
+
+
+def _kin_value(v):
+    """JSON-friendly representation of a fit value (None → 'not available')."""
+    if v is None:
+        return _NA
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return _NA
+
+
+def _cycle_kinetics_json(meta: dict, channels: list, eval_lookup: dict) -> dict:
+    """Build the ``kinetics.json`` sidecar for one cycle folder.
+
+    For every channel exported, report the 1:1 fit if WAVEcontrol stored
+    one in the CXW; otherwise emit a placeholder marked
+    ``'not available'``.  Errors are passed through verbatim as the
+    instrument software reports them (no conversion to %, CI, …).
+    """
+    idx = meta.get('index')
+    fits = {}
+    for ch in sorted(channels):
+        e = eval_lookup.get((idx, ch))
+        if e is None:
+            fits[ch] = {
+                'available': False,
+                'note': _NA,
+            }
+            continue
+        fits[ch] = {
+            'available': True,
+            'model': '1:1 Kinetic',
+            'ka_M-1_s-1': _kin_value(e.get('ka')),
+            'ka_error': _kin_value(e.get('ka_error')),
+            'kd_s-1': _kin_value(e.get('kd')),
+            'kd_error': _kin_value(e.get('kd_error')),
+            'KD_M': _kin_value(e.get('KD')),
+            'Rmax_pg_per_mm2': _kin_value(e.get('Rmax')),
+            'Rmax_error': _kin_value(e.get('Rmax_error')),
+            'sqrt_chi2_pg_per_mm2': _kin_value(e.get('sqrt_chi2')),
+            'comment': e.get('comment') or '',
+        }
+    return {
+        'cycle_index': int(idx) if idx is not None else None,
+        'compound': meta.get('compound', ''),
+        'concentration_M': float(meta.get('concentration_M', 0.0)),
+        'fits': fits,
+    }
+
+
+def _kinetics_csv_rows(cxw_path: str, data: dict, grouped: dict,
+                       eval_lookup: dict) -> list:
+    """Build kinetics.csv rows for one CXW (one row per fit found).
+
+    Columns mirror the EV712A v1.0 release CSV layout.  Compound /
+    concentration are taken from the cycle metadata so that fits whose
+    Analyte string disagrees with the rack still resolve correctly.
+    """
+    instr = data.get('instrument') or {}
+    run_date = (instr.get('measurement_start') or '').split('T')[0]
+    rows = []
+    for key in sorted(grouped.keys()):
+        bundle = grouped[key]
+        meta = bundle['meta']
+        idx = meta.get('index')
+        for ch in sorted(bundle['channels'].keys()):
+            e = eval_lookup.get((idx, ch))
+            if e is None:
+                continue  # bulk CSV only carries actual fits
+            rows.append({
+                'source_file': os.path.basename(cxw_path),
+                'run_date': run_date,
+                'cycle_number': idx,
+                'channel': e.get('channel_str') or ch,
+                'channel_label': ch,
+                'cycle_type': meta.get('cycle_type', ''),
+                'compound': meta.get('compound', '') or e.get('compound', ''),
+                'concentration_M': meta.get('concentration_M'),
+                'ka_M-1_s-1': e.get('ka'),
+                'ka_error': e.get('ka_error'),
+                'kd_s-1': e.get('kd'),
+                'kd_error': e.get('kd_error'),
+                'KD_M': e.get('KD'),
+                'Rmax_pg_per_mm2': e.get('Rmax'),
+                'Rmax_error': e.get('Rmax_error'),
+                'sqrt_chi2_pg_per_mm2': e.get('sqrt_chi2'),
+                'comment': e.get('comment') or '',
+            })
+    return rows
+
+
+_KINETICS_CSV_COLUMNS = [
+    'source_file', 'run_date', 'cycle_number', 'channel', 'channel_label',
+    'cycle_type', 'compound', 'concentration_M',
+    'ka_M-1_s-1', 'ka_error', 'kd_s-1', 'kd_error', 'KD_M',
+    'Rmax_pg_per_mm2', 'Rmax_error', 'sqrt_chi2_pg_per_mm2', 'comment',
+]
+
+
+def _write_kinetics_csv(path: str, rows: list) -> None:
+    """Write a kinetics CSV.  Empty cells → empty string (never 'None')."""
+    with open(path, 'w', newline='') as fh:
+        w = csv.DictWriter(fh, fieldnames=_KINETICS_CSV_COLUMNS,
+                           extrasaction='ignore')
+        w.writeheader()
+        for r in rows:
+            clean = {}
+            for k in _KINETICS_CSV_COLUMNS:
+                v = r.get(k)
+                if v is None or v == '':
+                    clean[k] = ''
+                elif isinstance(v, float):
+                    clean[k] = f'{v:.6g}'
+                else:
+                    clean[k] = v
+            w.writerow(clean)
+
+
 def export_cxw(cxw_path: str, out_dir: str) -> dict:
     """Export one .cxw file's raw data into ``out_dir/{basename}/``.
 
@@ -195,6 +332,7 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
 
     grouped = _group_cycles(data)
     summary = _experiment_summary(cxw_path, data, grouped)
+    eval_lookup = _build_eval_lookup(data.get('evaluations', []))
 
     cycle_rows = []
     for key in sorted(grouped.keys()):
@@ -208,6 +346,10 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
         cmeta = _cycle_metadata(meta, list(chans.keys()))
         with open(os.path.join(cyc_dir, 'metadata.json'), 'w') as fh:
             json.dump(cmeta, fh, indent=2, sort_keys=True)
+
+        kjson = _cycle_kinetics_json(meta, list(chans.keys()), eval_lookup)
+        with open(os.path.join(cyc_dir, 'kinetics.json'), 'w') as fh:
+            json.dump(kjson, fh, indent=2, sort_keys=True)
 
         for label, entry in chans.items():
             csv_path = os.path.join(cyc_dir, f'{_sanitize(label)}.csv')
@@ -234,6 +376,12 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
     with open(os.path.join(cxw_root, 'experiment.json'), 'w') as fh:
         json.dump(summary, fh, indent=2, sort_keys=True)
 
+    # Per-CXW kinetics CSV (also used to build the package-wide bulk CSV).
+    kin_rows = _kinetics_csv_rows(cxw_path, data, grouped, eval_lookup)
+    _write_kinetics_csv(os.path.join(cxw_root, 'kinetics.csv'), kin_rows)
+    summary['kinetics_rows'] = kin_rows
+    summary['n_kinetic_fits'] = len(kin_rows)
+
     return summary
 
 
@@ -245,8 +393,19 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append(f'# {package_name}')
     lines.append('')
     lines.append('Self-describing data package exported by '
-                 '[SensoFit](https://github.com/) from Creoptix WAVE '
-                 '`.cxw` experiment files.')
+                 '[SensoFit](https://github.com/xchem/sensofit) from '
+                 'Creoptix WAVE `.cxw` experiment files.')
+    lines.append('')
+    lines.append('**About SensoFit.** SensoFit is an *exploratory* '
+                 'open-source tool for parsing and analysing Creoptix '
+                 'WAVE grating-coupled interferometry (GCI) data. It is '
+                 'under active development and will be refined alongside '
+                 'future data releases — both the data layout and the '
+                 'analysis methods are expected to evolve. Feedback and '
+                 'issues are very welcome at '
+                 '<https://github.com/xchem/sensofit>.')
+    lines.append('')
+    lines.append('**CEDRIC TODO NOTEBOOKS:** add list of URLS and notebooks for exploring the data')
     lines.append('')
     lines.append(f'- **Generated:** {now}')
     lines.append(f'- **Source files:** {len(summaries)}')
@@ -258,17 +417,51 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('```')
     lines.append(f'{package_name}.zip')
     lines.append('├── README.md')
+    lines.append('├── kinetics.csv')
     for s in summaries:
         lines.append(f'└── {s["cxw_folder"]}/')
         lines.append('    ├── experiment.json')
+        lines.append('    ├── kinetics.csv')
         for cyc in s['cycles'][:3]:
             lines.append(f'    ├── {cyc["folder"]}/')
             lines.append('    │   ├── metadata.json')
+            lines.append('    │   ├── kinetics.json')
             for ch in cyc['channels']:
                 lines.append(f'    │   └── {_sanitize(ch)}.csv')
         if len(s['cycles']) > 3:
             lines.append(f'    └── ... ({len(s["cycles"]) - 3} more cycle folders)')
     lines.append('```')
+    lines.append('')
+
+    lines.append('## Kinetic fits')
+    lines.append('')
+    lines.append('Per-channel 1:1 fits saved by WAVEcontrol in the source '
+                 '`.cxw` (when present) are extracted as-is — values and '
+                 'errors are reproduced verbatim from the instrument '
+                 'software, with no re-conversion to %, confidence '
+                 'interval, or χ² (vs. sqrt χ²) form.')
+    lines.append('')
+    lines.append('- Top-level `kinetics.csv` aggregates every fit found '
+                 'across all source files (one row per cycle × channel).')
+    lines.append('- Each per-CXW folder also contains a `kinetics.csv` '
+                 'restricted to that experiment.')
+    lines.append('- Inside each cycle folder, `kinetics.json` reports the '
+                 'fit for every exported channel (or `"not available"` '
+                 'when the CXW carried no fit for that channel).')
+    lines.append('')
+    lines.append('| Field | Units | Description |')
+    lines.append('|---|---|---|')
+    lines.append('| `ka_M-1_s-1` | M⁻¹ s⁻¹ | Association rate constant |')
+    lines.append('| `kd_s-1` | s⁻¹ | Dissociation rate constant |')
+    lines.append('| `KD_M` | M | Equilibrium dissociation constant '
+                 '(= kd / ka) |')
+    lines.append('| `Rmax_pg_per_mm2` | pg/mm² | Maximum response (saturation) |')
+    lines.append('| `sqrt_chi2_pg_per_mm2` | pg/mm² | Square-root of χ² '
+                 '(global fit residual) |')
+    lines.append('| `*_error` | (as reported) | Error on the corresponding '
+                 'parameter, exactly as stored in the CXW |')
+    lines.append('| `comment` | — | `<UserComment>` annotation from the '
+                 'evaluation file |')
     lines.append('')
 
     lines.append('## Data format')
@@ -431,7 +624,8 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('Generated by `sensofit.dataexporter.export_package`. '
                  'Only metadata exposed by `sensofit.data_loader.load_cxw` '
                  'is included; see [docs/data_loader.md] in the SensoFit '
-                 'repository for the full data-loading specification.')
+                 'repository (<https://github.com/xchem/sensofit>) for '
+                 'the full data-loading specification.')
     lines.append('')
 
     return '\n'.join(lines)
@@ -487,6 +681,13 @@ def export_package(cxw_paths, output_zip: str,
         readme = _render_readme(summaries, package_name)
         with open(os.path.join(pkg_root, 'README.md'), 'w') as fh:
             fh.write(readme)
+
+        # Bulk kinetics CSV across every CXW in the package.
+        bulk_rows = []
+        for s in summaries:
+            bulk_rows.extend(s.get('kinetics_rows', []))
+        _write_kinetics_csv(os.path.join(pkg_root, 'kinetics.csv'),
+                            bulk_rows)
 
         out_abs = os.path.abspath(output_zip)
         os.makedirs(os.path.dirname(out_abs) or '.', exist_ok=True)
