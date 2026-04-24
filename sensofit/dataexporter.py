@@ -63,15 +63,27 @@ def _format_concentration(M: float) -> str:
 
 
 def _cycle_label(cyc: dict) -> str:
-    """Best-effort compound label, falling back for non-Sample cycles."""
-    cpd = (cyc.get('compound') or '').strip()
-    if cpd:
-        return cpd
+    """Best-effort cycle label for the folder name.
+
+    Non-Sample cycles (Blank / DMSO Cal. / ControlSample) are tagged by
+    type so the folder is unambiguous.  The compound from the
+    autosampler well is preserved only when it is genuinely informative:
+    for Controls (real reference compound) and Samples.  Blanks and
+    DMSO Cal. wells are buffer/DMSO and their inherited "compound" is
+    misleading, so it is intentionally omitted.
+    """
     ct = (cyc.get('cycle_type') or '').strip()
+    cpd = (cyc.get('compound') or '').strip()
     if ct == 'Blank':
         return 'Blank'
     if ct == 'DMSO Cal.':
-        return 'DMSO_Cal'
+        return 'DMSOcal'
+    if ct == 'ControlSample':
+        # Real control compound name (e.g. literally 'control' on the
+        # right rack, or an ASAP control identifier).
+        return f'Control__{cpd}' if cpd else 'Control'
+    if cpd:
+        return cpd
     return ct or 'cycle'
 
 
@@ -126,22 +138,45 @@ def _experiment_summary(cxw_path: str, data: dict, grouped: dict) -> dict:
         'reference_channel': cfg['reference_channel'],
         'cycle_counts': dict(type_counts),
         'n_cycles_total': len(grouped),
+        'project': data.get('project', {}),
+        'instrument': data.get('instrument', {}),
+        'buffers': data.get('buffers', []),
+        'autosampler': data.get('autosampler', {}),
+        'immobilization': data.get('immobilization', {}),
+        'report_points': data.get('report_points', []),
     }
 
 
 def _cycle_metadata(meta: dict, channels: list) -> dict:
     """JSON-safe per-cycle metadata sidecar."""
+    def _opt(v):
+        return None if v is None else float(v)
     return {
         'index': int(meta.get('index', -1)),
         'cycle_type': meta.get('cycle_type', ''),
         'guid': meta.get('guid', ''),
         'name': meta.get('name', ''),
         'slot': meta.get('slot', ''),
+        'slot_side': meta.get('slot_side', ''),
         'compound': meta.get('compound', ''),
         'concentration_M': float(meta.get('concentration_M', 0.0)),
         'concentration_pretty': _format_concentration(
             meta.get('concentration_M', 0.0)),
         'mw_Da': float(meta.get('mw', 0.0)),
+        'reagent_category': meta.get('reagent_category', ''),
+        'reagent_volume_uL': float(meta.get('reagent_volume_uL', 0.0) or 0.0),
+        'flow_rate_uLmin': _opt(meta.get('flow_rate_uLmin')),
+        'contact_time_s': _opt(meta.get('contact_time_s')),
+        'time_after_injection_s': _opt(meta.get('time_after_injection_s')),
+        'baseline_duration_s': _opt(meta.get('baseline_duration_s')),
+        'injection_mode': meta.get('injection_mode', ''),
+        'pulse_durations_s': [float(x) for x in (meta.get('pulse_durations_s') or [])],
+        'chip_prime_mode': meta.get('chip_prime_mode', ''),
+        'wash_mode': meta.get('wash_mode', ''),
+        'buffer_inlet': meta.get('buffer_inlet', ''),
+        'block_id': meta.get('block_id'),
+        'state': meta.get('state', ''),
+        'enabled': bool(meta.get('enabled', True)),
         'markers': {k: float(v) for k, v in (meta.get('markers') or {}).items()},
         'channels': sorted(channels),
     }
@@ -188,6 +223,9 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
             'concentration_M': cmeta['concentration_M'],
             'mw_Da': cmeta['mw_Da'],
             'slot': cmeta['slot'],
+            'slot_side': cmeta['slot_side'],
+            'injection_mode': cmeta['injection_mode'],
+            'contact_time_s': cmeta['contact_time_s'],
             'channels': cmeta['channels'],
         })
 
@@ -272,6 +310,92 @@ def _render_readme(summaries: list, package_name: str) -> str:
         lines.append(f'### {s["source_file"]}')
         lines.append('')
         lines.append(f'- Folder: `{s["cxw_folder"]}/`')
+
+        proj = s.get('project') or {}
+        if proj:
+            lines.append('')
+            lines.append('**Project**')
+            lines.append('')
+            for label, key in [
+                ('Name', 'name'),
+                ('Created', 'creation_time'),
+                ('Creator', 'creator'),
+                ('Description', 'description'),
+                ('Notes', 'notes'),
+            ]:
+                v = (proj.get(key) or '').strip()
+                if v:
+                    lines.append(f'- {label}: {v}')
+            if proj.get('ligand_mw_Da'):
+                lines.append(f'- Ligand MW: {proj["ligand_mw_Da"]:g} Da')
+
+        instr = s.get('instrument') or {}
+        if instr:
+            lines.append('')
+            lines.append('**Instrument & run**')
+            lines.append('')
+            for label, key, suffix in [
+                ('Device', 'device_type', ''),
+                ('Serial number', 'serial_number', ''),
+                ('Hardware version', 'hardware_version', ''),
+                ('Firmware', 'firmware_version', ''),
+                ('WAVEcontrol (saved)', 'wave_control_version', ''),
+                ('WAVEcontrol (recorded)', 'serie_recorded_version', ''),
+                ('Flow-cell temperature', 'fc_temperature_C', ' °C'),
+                ('Acquisition rate', 'acquisition_rate_Hz', ' Hz'),
+                ('Max flow rate', 'max_flow_rate_uLmin', ' µL/min'),
+                ('Measurement start', 'measurement_start', ''),
+                ('Measurement end', 'measurement_end', ''),
+            ]:
+                v = instr.get(key)
+                if v not in (None, ''):
+                    lines.append(f'- {label}: {v}{suffix}')
+
+        immob = s.get('immobilization') or {}
+        if immob:
+            lines.append('')
+            lines.append('**Chip preparation (immobilization)**')
+            lines.append('')
+            if immob.get('name'):
+                lines.append(f'- Serie name: {immob["name"]}')
+            if immob.get('capture_fcs'):
+                fcs = ', '.join(f'FC{n}' for n in immob['capture_fcs'])
+                lines.append(f'- Capture flow cell(s): {fcs}')
+            if immob.get('measurement_start'):
+                lines.append(f'- Started: {immob["measurement_start"]}')
+            if immob.get('measurement_end'):
+                lines.append(f'- Ended: {immob["measurement_end"]}')
+
+        buffers = s.get('buffers') or []
+        if buffers:
+            lines.append('')
+            lines.append('**Buffers (inlet ports)**')
+            lines.append('')
+            lines.append('| Id | Inlet | Name |')
+            lines.append('|---|---|---|')
+            for b in buffers:
+                lines.append(f'| {b.get("id","")} | {b.get("inlet","")} | '
+                             f'{b.get("name","") or "—"} |')
+
+        rps = s.get('report_points') or []
+        if rps:
+            lines.append('')
+            lines.append('**Report points**')
+            lines.append('')
+            lines.append('| Name | Marker | Shift (s) | Averaging | Reference |')
+            lines.append('|---|---|---|---|---|')
+            for rp in rps:
+                shift = rp.get('shift_s')
+                avg = rp.get('averaging')
+                lines.append(
+                    f'| {rp.get("name","")} | {rp.get("marker","")} | '
+                    f'{shift if shift is not None else ""} | '
+                    f'{avg if avg is not None else ""} | '
+                    f'{"yes" if rp.get("is_reference") else "no"} |')
+
+        lines.append('')
+        lines.append('**Channels & cycle counts**')
+        lines.append('')
         lines.append(f'- Active flow cell: FC{s["active_fc"]} '
                      f'(channel {s["active_channel"]})')
         lines.append(f'- Reference flow cell: FC{s["reference_fc"]} '
@@ -282,15 +406,23 @@ def _render_readme(summaries: list, package_name: str) -> str:
         cc = ', '.join(f'{k}={v}' for k, v in sorted(s['cycle_counts'].items()))
         lines.append(f'- Cycle counts: {cc}')
         lines.append('')
+        lines.append('**Cycle table**')
+        lines.append('')
         lines.append('| # | Type | Compound | Concentration | MW (Da) | '
-                     'Slot | Channels | Folder |')
-        lines.append('|---|---|---|---|---|---|---|---|')
+                     'Slot | Inj. mode | Contact (s) | Channels | Folder |')
+        lines.append('|---|---|---|---|---|---|---|---|---|---|')
         for cyc in s['cycles']:
             chans = ', '.join(cyc['channels'])
+            slot = cyc['slot'] or '—'
+            if cyc.get('slot_side'):
+                slot = f'{cyc["slot_side"][:1]}-{slot}'
+            ct = cyc.get('contact_time_s')
+            ct_s = f'{ct:g}' if ct is not None else '—'
             lines.append(
                 f'| {cyc["index"]} | {cyc["cycle_type"]} | '
                 f'{cyc["compound"] or "—"} | {cyc["concentration_pretty"]} | '
-                f'{cyc["mw_Da"]:g} | {cyc["slot"] or "—"} | {chans} | '
+                f'{cyc["mw_Da"]:g} | {slot} | '
+                f'{cyc.get("injection_mode") or "—"} | {ct_s} | {chans} | '
                 f'`{cyc["folder"]}` |')
         lines.append('')
 

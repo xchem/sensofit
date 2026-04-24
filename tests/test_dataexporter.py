@@ -49,10 +49,27 @@ class TestHelpers:
                'concentration_M': 0, 'index': 1}
         assert _cycle_folder_name(cyc) == 'Blank__0M__cyc001'
 
+    def test_cycle_folder_name_blank_with_inherited_compound(self):
+        # Blank cycles may carry an inherited compound name from a
+        # mismatched-side wizard lookup; the folder must NOT include it.
+        cyc = {'compound': 'ASAP-0001', 'cycle_type': 'Blank',
+               'concentration_M': 25e-6, 'index': 4}
+        name = _cycle_folder_name(cyc)
+        assert name.startswith('Blank__')
+        assert 'ASAP' not in name
+        assert name.endswith('__cyc004')
+
     def test_cycle_folder_name_dmso(self):
         cyc = {'compound': '', 'cycle_type': 'DMSO Cal.',
                'concentration_M': 0, 'index': 2}
-        assert _cycle_folder_name(cyc) == 'DMSO_Cal__0M__cyc002'
+        assert _cycle_folder_name(cyc) == 'DMSOcal__0M__cyc002'
+
+    def test_cycle_folder_name_control(self):
+        cyc = {'compound': 'ASAP-CTRL', 'cycle_type': 'ControlSample',
+               'concentration_M': 5e-6, 'index': 9}
+        name = _cycle_folder_name(cyc)
+        assert name.startswith('Control__')
+        assert '__cyc009' in name
 
 
 @pytest.mark.skipif(not os.path.isfile(CXW),
@@ -96,8 +113,24 @@ class TestExportCxw:
         meta = json.loads(meta_path.read_text())
         for key in ('index', 'cycle_type', 'guid', 'compound',
                     'concentration_M', 'concentration_pretty',
-                    'mw_Da', 'markers', 'channels'):
+                    'mw_Da', 'markers', 'channels',
+                    'slot_side', 'flow_rate_uLmin', 'contact_time_s',
+                    'injection_mode', 'pulse_durations_s',
+                    'reagent_category', 'buffer_inlet'):
             assert key in meta
+
+    def test_experiment_json_enriched(self, tmp_path):
+        summary = export_cxw(CXW, str(tmp_path))
+        exp_path = tmp_path / summary['cxw_folder'] / 'experiment.json'
+        exp = json.loads(exp_path.read_text())
+        for key in ('project', 'instrument', 'buffers',
+                    'autosampler', 'immobilization', 'report_points'):
+            assert key in exp, f'missing top-level key: {key}'
+        # Instrument basics from the Pulse serie
+        assert exp['instrument'].get('device_type')
+        assert exp['instrument'].get('serial_number')
+        # Report points list non-empty for a real run
+        assert exp['report_points'], 'no report points captured'
 
 
 @pytest.mark.skipif(not os.path.isfile(CXW),

@@ -202,7 +202,17 @@ def _detect_channels_legacy(project_root: ET.Element):
 # ---------------------------------------------------------------------------
 
 def _build_reagent_lookup(zf: zipfile.ZipFile, serie_guid: str) -> dict:
-    """Parse the RAPID Kinetics Wizard to build slot → reagent info."""
+    """Parse the RAPID Kinetics Wizard to build a ``(side, slot) → reagent``
+    lookup.
+
+    The Wizard stores its reagents inside ``<LeftRack>`` and
+    ``<RightRack>`` containers; the same ``Slot`` (e.g. ``D2``) may exist
+    on **both** racks but refer to completely different wells (a Sample
+    compound on the left, the control or a blank/DMSO well on the
+    right).  Keying the lookup on ``(side, slot)`` is required so that
+    Control / Blank / DMSO cycles — which typically run from the Right
+    rack — pick up the correct reagent.
+    """
     lookup = {}
     for fname in zf.namelist():
         if not fname.startswith('Wizard/'):
@@ -210,15 +220,30 @@ def _build_reagent_lookup(zf: zipfile.ZipFile, serie_guid: str) -> dict:
         wiz = _parse_xml(zf, fname)
         if wiz.findtext('SerieId') != serie_guid:
             continue
-        for r in wiz.findall('.//Reagent'):
-            slot = r.get('Slot', '')
-            if not slot:
+        for rack_tag, side in (('LeftRack', 'Left'), ('RightRack', 'Right')):
+            rack = wiz.find(rack_tag)
+            if rack is None:
                 continue
-            lookup[slot] = {
-                'compound': r.get('Designation', ''),
-                'concentration_M': _parse_concentration(r.get('Concentration', '0')),
-                'mw': _parse_mw(r.get('MW', '0')),
-            }
+            for r in rack.findall('.//Reagent'):
+                slot = r.get('Slot', '')
+                if not slot:
+                    continue
+                try:
+                    vol = float(r.get('Volume', '0') or '0')
+                except ValueError:
+                    vol = 0.0
+                try:
+                    conc_M = _parse_concentration(
+                        r.get('Concentration', '0'))
+                except ValueError:
+                    conc_M = 0.0
+                lookup[(side, slot)] = {
+                    'compound': r.get('Designation', ''),
+                    'concentration_M': conc_M,
+                    'mw': _parse_mw(r.get('MW', '0')),
+                    'category': r.get('Category', ''),
+                    'volume_uL': vol,
+                }
         break  # found the right wizard
     return lookup
 
@@ -227,21 +252,42 @@ def _build_reagent_lookup(zf: zipfile.ZipFile, serie_guid: str) -> dict:
 # Cycle metadata extraction
 # ---------------------------------------------------------------------------
 
-def _extract_cycles(serie_el: ET.Element, reagent_lookup: dict) -> list[dict]:
-    """Extract ordered cycle metadata from a Serie element."""
+def _extract_cycles(serie_el: ET.Element, reagent_lookup: dict,
+                    autosampler_lookup: dict | None = None) -> list[dict]:
+    """Extract ordered cycle metadata from a Serie element.
+
+    ``autosampler_lookup`` (optional) is keyed by ``(side, slot)`` and
+    supplies the populated ``category`` and ``volume_uL`` values that the
+    Wizard placeholders lack.
+    """
+    autosampler_lookup = autosampler_lookup or {}
     cycles = []
     for cyc in serie_el.find('Cycles').findall('Cycle'):
         ct_el = cyc.find('CycleType')
         cycle_type = ct_el.text if ct_el is not None else ''
 
-        # Autosampler slot
+        # Autosampler slot + side
         slot_el = cyc.find('.//AutosamplerLocation')
         slot = slot_el.get('Slot', '') if slot_el is not None else ''
+        slot_side = slot_el.get('Side', '') if slot_el is not None else ''
 
-        # Reagent info from wizard
-        reagent = reagent_lookup.get(slot, {})
+        # Reagent info: wizard provides compound/conc/MW per (side, slot);
+        # the autosampler reagent table carries the real category/volume
+        # (the wizard ones are placeholders).
+        reagent = dict(reagent_lookup.get((slot_side, slot), {}))
+        as_info = autosampler_lookup.get((slot_side, slot), {})
+        # Prefer autosampler designation if wizard is empty (e.g. side
+        # mismatch in legacy files where lookup keyed only on slot).
+        if not reagent.get('compound') and as_info.get('designation'):
+            reagent['compound'] = as_info['designation']
+            if as_info.get('mw_Da'):
+                reagent['mw'] = as_info['mw_Da']
+            if as_info.get('concentration_M') is not None:
+                reagent['concentration_M'] = as_info['concentration_M']
+        category = as_info.get('category') or reagent.get('category', '')
+        volume_uL = as_info.get('volume_uL', reagent.get('volume_uL', 0.0))
 
-        # Markers (Injection, Rinse, etc.)
+        # Markers (Baseline, Injection, Rinse, RinseEnd, ...)
         markers = {}
         for marker in cyc.findall('.//Marker'):
             mtype = marker.findtext('Type', '')
@@ -249,18 +295,266 @@ def _extract_cycles(serie_el: ET.Element, reagent_lookup: dict) -> list[dict]:
             if mtype:
                 markers[mtype] = mx
 
+        # Pulse durations (kinetic-titration injections)
+        pulse_durations = []
+        pd_el = cyc.find('PulseDurations')
+        if pd_el is not None:
+            for d in pd_el.findall('double'):
+                try:
+                    pulse_durations.append(float(d.text or '0'))
+                except ValueError:
+                    pass
+
+        def _opt_float(tag):
+            v = cyc.findtext(tag, '')
+            try:
+                return float(v) if v else None
+            except ValueError:
+                return None
+
+        def _opt_int(tag):
+            v = cyc.findtext(tag, '')
+            try:
+                return int(v) if v else None
+            except ValueError:
+                return None
+
         cycles.append({
             'index': int(cyc.findtext('Index', '-1')),
             'cycle_type': cycle_type,
             'guid': cyc.findtext('Guid', ''),
             'name': cyc.findtext('Name', ''),
             'slot': slot,
+            'slot_side': slot_side,
             'compound': reagent.get('compound', ''),
             'concentration_M': reagent.get('concentration_M', 0.0),
             'mw': reagent.get('mw', 0.0),
+            'reagent_category': category,
+            'reagent_volume_uL': volume_uL,
             'markers': markers,
+            'flow_rate_uLmin': _opt_float('FlowRate'),
+            'contact_time_s': _opt_float('ContactTime'),
+            'time_after_injection_s': _opt_float('TimeAfterInjection'),
+            'baseline_duration_s': _opt_float('BaselineDuration'),
+            'injection_mode': cyc.findtext('InjectionModeLabel', ''),
+            'pulse_durations_s': pulse_durations,
+            'chip_prime_mode': cyc.findtext('ChipPrimeModeLabel', ''),
+            'wash_mode': cyc.findtext('WashModeLabel', ''),
+            'buffer_inlet': cyc.findtext('Buffer', ''),
+            'block_id': _opt_int('BlockId'),
+            'state': cyc.findtext('State', ''),
+            'enabled': cyc.findtext('IsEnabled', '') == 'true',
         })
     return cycles
+
+
+# ---------------------------------------------------------------------------
+# Project / instrument / buffers / autosampler / report points
+# ---------------------------------------------------------------------------
+
+def _extract_project_meta(zf: zipfile.ZipFile) -> dict:
+    """Parse ``_projectmeta.cx3`` for project-level context."""
+    if '_projectmeta.cx3' not in zf.namelist():
+        return {}
+    try:
+        root = _parse_xml(zf, '_projectmeta.cx3')
+    except ET.ParseError:
+        return {}
+
+    def _t(tag):
+        return (root.findtext(tag) or '').strip()
+
+    def _f(tag):
+        v = _t(tag)
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+
+    log_entries = []
+    for le in root.findall('.//LogEntry'):
+        log_entries.append({
+            'time': (le.findtext('LogTime') or '').strip(),
+            'type': (le.findtext('LogType') or '').strip(),
+            'visibility': (le.findtext('LogVisibility') or '').strip(),
+            'message': (le.findtext('LogMessage') or '').strip(),
+        })
+
+    return {
+        'name': _t('Name'),
+        'id': _t('Id'),
+        'creator': _t('Creator'),
+        'creation_time': _t('CreationTime'),
+        'number': _t('Number'),
+        'journal': _t('Journal'),
+        'description': _t('Description'),
+        'objectives': _t('Objectives'),
+        'notes': _t('Notes'),
+        'results': _t('Results'),
+        'ligand_mw_Da': _f('LigandMolecularWeight'),
+        'log_entries': log_entries,
+    }
+
+
+def _extract_instrument(project_root: ET.Element,
+                        rk_serie: ET.Element) -> dict:
+    """Instrument / firmware / software / run timing for the Pulse serie."""
+    info = {
+        'device_type': (project_root.findtext('DeviceType') or '').strip(),
+        'wave_control_version': (
+            project_root.findtext('WAVEcontrolLastSavedVersion') or '').strip(),
+    }
+    if rk_serie is None:
+        return info
+    meta = rk_serie.find('Meta')
+    if meta is not None:
+        def _t(tag):
+            return (meta.findtext(tag) or '').strip()
+        fw = '.'.join(filter(None, [
+            _t('FirmwareMajorVersion'), _t('FirmwareMinorVersion'),
+            _t('FirmwareBuild'), _t('FirmwareRevision')]))
+        info.update({
+            'serial_number': _t('SerialNumber'),
+            'hardware_version': _t('HardwareVersion'),
+            'firmware_version': fw,
+            'serie_recorded_version': _t('WAVEcontrolSerieRecordedVersion'),
+            'measurement_start': _t('MeasurementStartTime'),
+            'measurement_end': _t('MeasurementEndTime'),
+        })
+    fc_temp = rk_serie.findtext('FCTemperature')
+    if fc_temp:
+        try:
+            info['fc_temperature_C'] = float(fc_temp)
+        except ValueError:
+            pass
+    rate = rk_serie.findtext('AcquisitionRate')
+    if rate:
+        try:
+            info['acquisition_rate_Hz'] = float(rate)
+        except ValueError:
+            pass
+    mfr = rk_serie.findtext('MaxFlowRate')
+    if mfr:
+        try:
+            info['max_flow_rate_uLmin'] = float(mfr)
+        except ValueError:
+            pass
+    return info
+
+
+def _extract_buffers(rk_serie: ET.Element) -> list[dict]:
+    """List of buffer port definitions for the Pulse serie."""
+    out = []
+    if rk_serie is None:
+        return out
+    for b in rk_serie.findall('.//Buffers/Buffer'):
+        out.append({
+            'id': (b.findtext('Id') or '').strip(),
+            'inlet': (b.findtext('Inlet') or '').strip(),
+            'name': (b.findtext('Name') or '').strip(),
+        })
+    return out
+
+
+def _extract_autosampler(rk_serie: ET.Element) -> dict:
+    """Autosampler racks + reagent table (with category & volume)."""
+    out = {'racks': [], 'reagents': []}
+    if rk_serie is None:
+        return out
+    asv = rk_serie.find('AutosamplerVM')
+    if asv is None:
+        return out
+    for rack_tag in ('LeftRack', 'RightRack'):
+        rack = asv.find(rack_tag)
+        if rack is None:
+            continue
+        rc = rack.find('.//RackConfig')
+        rack_info = {
+            'side': rack_tag.replace('Rack', ''),
+            'use_single_well': rack.get('UseSingleWell', ''),
+            'columns': rc.get('Columns', '') if rc is not None else '',
+            'rows': rc.get('Rows', '') if rc is not None else '',
+            'rack_volume_uL': rc.get('Volume', '') if rc is not None else '',
+            'well_volume_uL': (rack.findtext('WellVolume') or '').strip(),
+        }
+        out['racks'].append(rack_info)
+        for r in rack.findall('.//Reagent'):
+            try:
+                vol = float(r.get('Volume', '0') or '0')
+            except ValueError:
+                vol = 0.0
+            conc_raw = r.get('Concentration', '')
+            try:
+                conc_M = _parse_concentration(conc_raw or '0')
+            except ValueError:
+                conc_M = None  # e.g. '0.5 %' DMSO
+            out['reagents'].append({
+                'side': rack_tag.replace('Rack', ''),
+                'slot': r.get('Slot', ''),
+                'designation': r.get('Designation', ''),
+                'category': r.get('Category', ''),
+                'concentration_M': conc_M,
+                'concentration_raw': conc_raw,
+                'mw_Da': _parse_mw(r.get('MW', '0')),
+                'volume_uL': vol,
+            })
+    return out
+
+
+def _extract_immobilization(project_root: ET.Element) -> dict:
+    """Summary of the Immobilization serie (chip prep)."""
+    serie = next((s for s in project_root.findall('.//Serie')
+                  if s.findtext('Type') == 'Immobilization'), None)
+    if serie is None:
+        return {}
+    meta = serie.find('Meta')
+    info = {
+        'name': (serie.findtext('Name') or '').strip(),
+        'guid': (serie.findtext('Guid') or '').strip(),
+        'measurement_start': (
+            meta.findtext('MeasurementStartTime') or '').strip()
+            if meta is not None else '',
+        'measurement_end': (
+            meta.findtext('MeasurementEndTime') or '').strip()
+            if meta is not None else '',
+        'capture_fcs': sorted(_capture_fcs(project_root)),
+        'cycle_count': len(serie.findall('.//Cycle')),
+    }
+    return info
+
+
+def _extract_report_points(rk_serie: ET.Element) -> list[dict]:
+    """Report-point definitions from the Pulse serie."""
+    out = []
+    if rk_serie is None:
+        return out
+    for rp in rk_serie.findall('.//ReportPointConfiguration'):
+        def _t(tag):
+            return (rp.findtext(tag) or '').strip()
+        try:
+            shift = float(_t('Shift'))
+        except ValueError:
+            shift = None
+        try:
+            avg = float(_t('Averaging'))
+        except ValueError:
+            avg = None
+        out.append({
+            'name': _t('Name'),
+            'marker': _t('MarkerType'),
+            'shift_s': shift,
+            'averaging': avg,
+            'is_reference': _t('IsReference') == 'true',
+            'active': _t('Active') == 'true',
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Wizard reagent lookup — extended with category and volume
+# ---------------------------------------------------------------------------
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +649,20 @@ def load_cxw(filepath: str, channels='all') -> dict:
         # Reagent lookup from wizard
         reagent_lookup = _build_reagent_lookup(zf, rk_guid)
 
-        # Cycle metadata
-        all_cycles = _extract_cycles(rk_serie, reagent_lookup)
+        # Extended project / instrument / buffers / autosampler / report points
+        project_meta = _extract_project_meta(zf)
+        instrument = _extract_instrument(project, rk_serie)
+        buffers = _extract_buffers(rk_serie)
+        autosampler = _extract_autosampler(rk_serie)
+        immobilization = _extract_immobilization(project)
+        report_points = _extract_report_points(rk_serie)
+
+        # (side, slot) → {category, volume_uL, ...}  for cycle merging
+        as_lookup = {(r['side'], r['slot']): r
+                     for r in autosampler.get('reagents', [])}
+
+        # Cycle metadata (with autosampler enrichment)
+        all_cycles = _extract_cycles(rk_serie, reagent_lookup, as_lookup)
 
         # Load HDF5 data
         h5_bytes = zf.read('cyclesData.h5')
@@ -403,6 +709,12 @@ def load_cxw(filepath: str, channels='all') -> dict:
             'active_channel': first['active_ch'],
             'reference_channel': first['reference_ch'],
         },
+        'project': project_meta,
+        'instrument': instrument,
+        'buffers': buffers,
+        'autosampler': autosampler,
+        'immobilization': immobilization,
+        'report_points': report_points,
         'samples': samples,
         'dmso_cals': dmso_cals,
         'blanks': blanks,
