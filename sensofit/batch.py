@@ -68,6 +68,9 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
 
     rows = []
     n = len(samples)
+    if n == 0:
+        print(f"No samples found in file: {filepath}.")
+        return pd.DataFrame(), data
     t0 = time.time()
 
     for i, sample in enumerate(samples):

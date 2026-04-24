@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sensofit"
+version = "0.1.0"
+description = "Kinetic fitting for Creoptix GCI (Grating-Coupled Interferometry) biosensor data."
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "h5py",
+    "matplotlib",
+    "jupyterlab"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

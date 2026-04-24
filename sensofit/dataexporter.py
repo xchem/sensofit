@@ -4,9 +4,11 @@ The package layout is::
 
     {package}.zip
     ├── README.md
+    ├── kinetics.csv
     └── {cxw_basename}/
         ├── experiment.json
         └── {cpd}__{conc}__cyc{idx:03d}/
+            ├── kinetics.json         
             ├── metadata.json
             ├── FC2-FC1.csv     # columns: time_s, signal, raw_active, raw_reference
             └── FC3-FC1.csv
