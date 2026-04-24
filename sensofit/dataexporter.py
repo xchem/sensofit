@@ -65,12 +65,13 @@ def _format_concentration(M: float) -> str:
 def _cycle_label(cyc: dict) -> str:
     """Best-effort cycle label for the folder name.
 
-    Non-Sample cycles (Blank / DMSO Cal. / ControlSample) are tagged by
-    type so the folder is unambiguous.  The compound from the
-    autosampler well is preserved only when it is genuinely informative:
-    for Controls (real reference compound) and Samples.  Blanks and
-    DMSO Cal. wells are buffer/DMSO and their inherited "compound" is
-    misleading, so it is intentionally omitted.
+    Non-Sample cycles (Blank / DMSO Cal. / ControlSample / Priming /
+    Conditioning / Regeneration / …) are tagged by type so the folder
+    is unambiguous.  The compound from the autosampler well is
+    preserved only when it is genuinely informative: for Controls
+    (real reference compound) and Samples.  Buffer / DMSO / priming /
+    regeneration wells inherit a misleading "compound" string from
+    the rack, so it is intentionally omitted in those cases.
     """
     ct = (cyc.get('cycle_type') or '').strip()
     cpd = (cyc.get('compound') or '').strip()
@@ -82,9 +83,15 @@ def _cycle_label(cyc: dict) -> str:
         # Real control compound name (e.g. literally 'control' on the
         # right rack, or an ASAP control identifier).
         return f'Control__{cpd}' if cpd else 'Control'
+    if ct in ('Sample',):
+        return cpd or ct
+    # Non-fitting cycle types (Priming / Conditioning / Regeneration
+    # / …): tag by type, ignore inherited well "compound".
+    if ct:
+        return _sanitize(ct)
     if cpd:
         return cpd
-    return ct or 'cycle'
+    return 'cycle'
 
 
 def _cycle_folder_name(cyc: dict) -> str:
@@ -111,7 +118,7 @@ def _group_cycles(data: dict) -> dict:
     Each value is ``{'meta': cycle_meta_dict, 'channels': {label: entry}}``.
     """
     grouped: dict = {}
-    for bucket in ('samples', 'dmso_cals', 'blanks'):
+    for bucket in ('samples', 'dmso_cals', 'blanks', 'other_cycles'):
         for entry in data.get(bucket, []):
             key = (entry['index'], entry['guid'])
             if key not in grouped:
@@ -347,9 +354,15 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
         with open(os.path.join(cyc_dir, 'metadata.json'), 'w') as fh:
             json.dump(cmeta, fh, indent=2, sort_keys=True)
 
-        kjson = _cycle_kinetics_json(meta, list(chans.keys()), eval_lookup)
-        with open(os.path.join(cyc_dir, 'kinetics.json'), 'w') as fh:
-            json.dump(kjson, fh, indent=2, sort_keys=True)
+        # kinetics.json only makes sense for cycles that can carry a
+        # 1:1 fit (Sample / ControlSample / DMSO Cal. / Blank).
+        # Priming / conditioning / regeneration are signal-only.
+        if cmeta['cycle_type'] in ('Sample', 'ControlSample',
+                                    'DMSO Cal.', 'Blank'):
+            kjson = _cycle_kinetics_json(meta, list(chans.keys()),
+                                          eval_lookup)
+            with open(os.path.join(cyc_dir, 'kinetics.json'), 'w') as fh:
+                json.dump(kjson, fh, indent=2, sort_keys=True)
 
         for label, entry in chans.items():
             csv_path = os.path.join(cyc_dir, f'{_sanitize(label)}.csv')
@@ -405,6 +418,16 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'issues are very welcome at '
                  '<https://github.com/xchem/sensofit>.')
     lines.append('')
+    lines.append('**Re-ingesting this package.** This data package can be '
+                 'fed straight back into SensoFit — no `.cxw` file needed. '
+                 'Use `sensofit.load_package(path)` (or the dispatcher '
+                 '`sensofit.load_experiment(path)`) on either the `.zip` '
+                 'or its unzipped directory; the returned dict matches '
+                 '`sensofit.load_cxw(...)` so all batch / fitting / '
+                 'plotting helpers work unchanged. The CLI also accepts '
+                 'the `.zip` directly: `python -m sensofit package.zip '
+                 '--mode dk`.')
+    lines.append('')
     lines.append('**CEDRIC TODO NOTEBOOKS:** add list of URLS and notebooks for exploring the data')
     lines.append('')
     lines.append(f'- **Generated:** {now}')
@@ -425,7 +448,9 @@ def _render_readme(summaries: list, package_name: str) -> str:
         for cyc in s['cycles'][:3]:
             lines.append(f'    ├── {cyc["folder"]}/')
             lines.append('    │   ├── metadata.json')
-            lines.append('    │   ├── kinetics.json')
+            ct = (cyc.get('cycle_type') or '').strip()
+            if ct in ('Sample', 'ControlSample', 'DMSO Cal.', 'Blank'):
+                lines.append('    │   ├── kinetics.json')
             for ch in cyc['channels']:
                 lines.append(f'    │   └── {_sanitize(ch)}.csv')
         if len(s['cycles']) > 3:
@@ -485,6 +510,15 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'unmodified reference.  Channel mapping inside the original '
                  '`.cxw` HDF5 store: FC*n* → channel `5 + 2n` '
                  '(FC1→7, FC2→9, FC3→11, FC4→13).')
+    lines.append('')
+    lines.append('**Non-fitting cycles** (Priming, Conditioning, '
+                 'Regeneration, …) are exported for completeness with '
+                 'their raw signal CSVs and `metadata.json`, but no '
+                 '`kinetics.json` — they are not analyte injections and '
+                 'WAVEcontrol does not store a 1:1 fit for them. The '
+                 'SensoFit fitting pipeline ignores these cycles; they '
+                 'are surfaced via `data["other_cycles"]` in '
+                 '`load_cxw` / `load_package`.')
     lines.append('')
 
     lines.append('## Marker definitions')

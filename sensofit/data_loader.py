@@ -731,6 +731,12 @@ def load_cxw(filepath: str, channels='all') -> dict:
             DMSO Cal. cycles (same fields).
         blanks : list[dict]
             Blank cycles.
+        other_cycles : list[dict]
+            Cycles whose ``cycle_type`` is none of Sample / ControlSample
+            / DMSO Cal. / Blank — typically Priming, Conditioning and
+            Regeneration. Same per-channel signal fields as ``samples``.
+            Exposed for completeness (round-trip data export); the
+            SensoFit fitting pipeline ignores this bucket.
         all_cycles : list[dict]
             Full ordered list of all RAPID Kinetics cycle metadata
             (without signal data).
@@ -789,10 +795,10 @@ def load_cxw(filepath: str, channels='all') -> dict:
     samples = []
     dmso_cals = []
     blanks = []
+    other_cycles = []
 
     for cyc in all_cycles:
-        if cyc['cycle_type'] not in ('Sample', 'ControlSample', 'DMSO Cal.', 'Blank'):
-            continue
+        ct = cyc['cycle_type']
 
         for pair in all_pairs:
             result = _load_cycle_data(
@@ -806,12 +812,18 @@ def load_cxw(filepath: str, channels='all') -> dict:
                      'raw_active': raw_active, 'raw_reference': raw_reference,
                      'channel': channel_label}
 
-            if cyc['cycle_type'] in ('Sample', 'ControlSample'):
+            if ct in ('Sample', 'ControlSample'):
                 samples.append(entry)
-            elif cyc['cycle_type'] == 'DMSO Cal.':
+            elif ct == 'DMSO Cal.':
                 dmso_cals.append(entry)
-            elif cyc['cycle_type'] == 'Blank':
+            elif ct == 'Blank':
                 blanks.append(entry)
+            else:
+                # Priming / Conditioning / Regeneration / etc.
+                # Exposed for completeness (e.g. data export and
+                # round-trip parity); the SensoFit fitting pipeline
+                # ignores this bucket.
+                other_cycles.append(entry)
 
     h5f.close()
 
@@ -835,6 +847,7 @@ def load_cxw(filepath: str, channels='all') -> dict:
         'samples': samples,
         'dmso_cals': dmso_cals,
         'blanks': blanks,
+        'other_cycles': other_cycles,
         'all_cycles': all_cycles,
         'evaluations': evaluations,
     }
