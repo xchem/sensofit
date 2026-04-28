@@ -4,9 +4,10 @@ The package layout is::
 
     {package}.zip
     ├── README.md
-    ├── kinetics.csv
+    ├── all_creoptix_kinetics_evaluations.csv
     └── {cxw_basename}/
         ├── experiment.json
+        ├── creoptix_kinetics_evaluations.csv
         └── {cpd}__{conc}__cyc{idx:03d}/
             ├── kinetics.json         
             ├── metadata.json
@@ -393,7 +394,7 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
 
     # Per-CXW kinetics CSV (also used to build the package-wide bulk CSV).
     kin_rows = _kinetics_csv_rows(cxw_path, data, grouped, eval_lookup)
-    _write_kinetics_csv(os.path.join(cxw_root, 'kinetics.csv'), kin_rows)
+    _write_kinetics_csv(os.path.join(cxw_root, 'creoptix_kinetics_evaluations.csv'), kin_rows)
     summary['kinetics_rows'] = kin_rows
     summary['n_kinetic_fits'] = len(kin_rows)
 
@@ -442,11 +443,11 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('```')
     lines.append(f'{package_name}.zip')
     lines.append('├── README.md')
-    lines.append('├── kinetics.csv')
+    lines.append('├── all_creoptix_kinetics_evaluations.csv')
     for s in summaries:
         lines.append(f'└── {s["cxw_folder"]}/')
         lines.append('    ├── experiment.json')
-        lines.append('    ├── kinetics.csv')
+        lines.append('    ├── creoptix_kinetics_evaluations.csv')
         for cyc in s['cycles'][:3]:
             lines.append(f'    ├── {cyc["folder"]}/')
             lines.append('    │   ├── metadata.json')
@@ -468,9 +469,9 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'software, with no re-conversion to %, confidence '
                  'interval, or χ² (vs. sqrt χ²) form.')
     lines.append('')
-    lines.append('- Top-level `kinetics.csv` aggregates every fit found '
+    lines.append('- Top-level `all_creoptix_kinetics_evaluations.csv` aggregates every fit found '
                  'across all source files (one row per cycle × channel).')
-    lines.append('- Each per-CXW folder also contains a `kinetics.csv` '
+    lines.append('- Each per-CXW folder also contains a `creoptix_kinetics_evaluations.csv` '
                  'restricted to that experiment.')
     lines.append('- Inside each cycle folder, `kinetics.json` reports the '
                  'fit for every exported channel (or `"not available"` '
@@ -722,7 +723,7 @@ def export_package(cxw_paths, output_zip: str,
         bulk_rows = []
         for s in summaries:
             bulk_rows.extend(s.get('kinetics_rows', []))
-        _write_kinetics_csv(os.path.join(pkg_root, 'kinetics.csv'),
+        _write_kinetics_csv(os.path.join(pkg_root, 'all_creoptix_kinetics_evaluations.csv'),
                             bulk_rows)
 
         out_abs = os.path.abspath(output_zip)
