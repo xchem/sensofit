@@ -517,7 +517,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('**Non-fitting cycles** (Priming, Conditioning, '
                  'Regeneration, …) are exported for completeness with '
                  'their raw signal CSVs and `metadata.json`, but no '
-                 '`kinetics.json` — they are not analyte injections and '
+                 '`kinetics.json` — there are not analyte injections and '
                  'WAVEcontrol does not store a 1:1 fit for them. The '
                  'SensoFit fitting pipeline ignores these cycles; they '
                  'are surfaced via `data["other_cycles"]` in '

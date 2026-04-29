@@ -5,6 +5,7 @@ __pycache__/
 .DS_Store
 *.png
 *.csv
+/notebooks/.ipynb_checkpoints/
 .ipynb_checkpoints/
 results/
 plan.md
