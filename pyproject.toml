@@ -15,7 +15,8 @@ dependencies = [
     "pandas",
     "h5py",
     "matplotlib",
-    "jupyterlab"
+    "jupyterlab",
+    "seaborn",
 ]
 
 [tool.setuptools.packages.find]
