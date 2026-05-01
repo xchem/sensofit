@@ -111,8 +111,8 @@ def _write_cycle_csv(path: str, time, signal, raw_active, raw_reference) -> None
         w = csv.writer(fh)
         w.writerow(['time_s', 'signal', 'raw_active', 'raw_reference'])
         for row in zip(time, signal, raw_active, raw_reference):
-            w.writerow([f'{row[0]:.6f}', f'{row[1]:.6f}',
-                        f'{row[2]:.6f}', f'{row[3]:.6f}'])
+            w.writerow([f'{float(row[0])}', f'{float(row[1])}',
+                        f'{float(row[2])}', f'{float(row[3])}'])
 
 
 def _group_cycles(data: dict) -> dict:
