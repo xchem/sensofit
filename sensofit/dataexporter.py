@@ -4,9 +4,10 @@ The package layout is::
 
     {package}.zip
     ├── README.md
-    ├── kinetics.csv
+    ├── all_creoptix_kinetics_evaluations.csv
     └── {cxw_basename}/
         ├── experiment.json
+        ├── creoptix_kinetics_evaluations.csv
         └── {cpd}__{conc}__cyc{idx:03d}/
             ├── kinetics.json         
             ├── metadata.json
@@ -110,8 +111,8 @@ def _write_cycle_csv(path: str, time, signal, raw_active, raw_reference) -> None
         w = csv.writer(fh)
         w.writerow(['time_s', 'signal', 'raw_active', 'raw_reference'])
         for row in zip(time, signal, raw_active, raw_reference):
-            w.writerow([f'{row[0]:.6g}', f'{row[1]:.6g}',
-                        f'{row[2]:.6g}', f'{row[3]:.6g}'])
+            w.writerow([f'{float(row[0])}', f'{float(row[1])}',
+                        f'{float(row[2])}', f'{float(row[3])}'])
 
 
 def _group_cycles(data: dict) -> dict:
@@ -393,7 +394,7 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
 
     # Per-CXW kinetics CSV (also used to build the package-wide bulk CSV).
     kin_rows = _kinetics_csv_rows(cxw_path, data, grouped, eval_lookup)
-    _write_kinetics_csv(os.path.join(cxw_root, 'kinetics.csv'), kin_rows)
+    _write_kinetics_csv(os.path.join(cxw_root, 'creoptix_kinetics_evaluations.csv'), kin_rows)
     summary['kinetics_rows'] = kin_rows
     summary['n_kinetic_fits'] = len(kin_rows)
 
@@ -430,7 +431,8 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'the `.zip` directly: `python -m sensofit package.zip '
                  '--mode dk`.')
     lines.append('')
-    lines.append('**CEDRIC TODO NOTEBOOKS:** add list of URLS and notebooks for exploring the data')
+    lines.append('The notebook available in the download of the OpenBind data'
+                 'release can also be found on GitHub [here](https://github.com/xchem/sensofit/blob/main/notebooks/00_data_release.ipynb)')
     lines.append('')
     lines.append(f'- **Generated:** {now}')
     lines.append(f'- **Source files:** {len(summaries)}')
@@ -442,11 +444,11 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('```')
     lines.append(f'{package_name}.zip')
     lines.append('├── README.md')
-    lines.append('├── kinetics.csv')
+    lines.append('├── all_creoptix_kinetics_evaluations.csv')
     for s in summaries:
         lines.append(f'└── {s["cxw_folder"]}/')
         lines.append('    ├── experiment.json')
-        lines.append('    ├── kinetics.csv')
+        lines.append('    ├── creoptix_kinetics_evaluations.csv')
         for cyc in s['cycles'][:3]:
             lines.append(f'    ├── {cyc["folder"]}/')
             lines.append('    │   ├── metadata.json')
@@ -468,9 +470,9 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'software, with no re-conversion to %, confidence '
                  'interval, or χ² (vs. sqrt χ²) form.')
     lines.append('')
-    lines.append('- Top-level `kinetics.csv` aggregates every fit found '
+    lines.append('- Top-level `all_creoptix_kinetics_evaluations.csv` aggregates every fit found '
                  'across all source files (one row per cycle × channel).')
-    lines.append('- Each per-CXW folder also contains a `kinetics.csv` '
+    lines.append('- Each per-CXW folder also contains a `creoptix_kinetics_evaluations.csv` '
                  'restricted to that experiment.')
     lines.append('- Inside each cycle folder, `kinetics.json` reports the '
                  'fit for every exported channel (or `"not available"` '
@@ -516,7 +518,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append('**Non-fitting cycles** (Priming, Conditioning, '
                  'Regeneration, …) are exported for completeness with '
                  'their raw signal CSVs and `metadata.json`, but no '
-                 '`kinetics.json` — they are not analyte injections and '
+                 '`kinetics.json` — there are not analyte injections and '
                  'WAVEcontrol does not store a 1:1 fit for them. The '
                  'SensoFit fitting pipeline ignores these cycles; they '
                  'are surfaced via `data["other_cycles"]` in '
@@ -722,7 +724,7 @@ def export_package(cxw_paths, output_zip: str,
         bulk_rows = []
         for s in summaries:
             bulk_rows.extend(s.get('kinetics_rows', []))
-        _write_kinetics_csv(os.path.join(pkg_root, 'kinetics.csv'),
+        _write_kinetics_csv(os.path.join(pkg_root, 'all_creoptix_kinetics_evaluations.csv'),
                             bulk_rows)
 
         out_abs = os.path.abspath(output_zip)

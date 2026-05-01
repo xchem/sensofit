@@ -335,6 +335,8 @@ def load_package(path: str, name: str | None = None,
                 f'No experiments found in package: {path!r} '
                 '(no folders containing experiment.json)')
         if name is None:
+            print(f'No experiment name given; loading first in alphabetical order: {exps[0]!r}\n'
+                  f'Other available experiments in package: {[exp for exp in exps if exp != exps[0]]}')
             exp_dir = exps[0]
         else:
             if name not in exps:
