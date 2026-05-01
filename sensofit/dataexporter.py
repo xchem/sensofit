@@ -431,7 +431,8 @@ def _render_readme(summaries: list, package_name: str) -> str:
                  'the `.zip` directly: `python -m sensofit package.zip '
                  '--mode dk`.')
     lines.append('')
-    lines.append('**CEDRIC TODO NOTEBOOKS:** add list of URLS and notebooks for exploring the data')
+    lines.append('The notebook available in the download of the OpenBind data'
+                 'release can also be found on GitHub [here](https://github.com/xchem/sensofit/blob/main/notebooks/00_data_release.ipynb)')
     lines.append('')
     lines.append(f'- **Generated:** {now}')
     lines.append(f'- **Source files:** {len(summaries)}')
