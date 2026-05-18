@@ -17,7 +17,7 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 """
 
 import numpy as np
-from .models import (build_concentration_profile, select_dmso_cal,
+from .models import (build_concentration_profile, select_dmso_cal, simulate_sensorgram,
                      smooth_and_differentiate,
                      double_reference)
 
@@ -202,6 +202,10 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
 
     KD = kd / ka if ka > 1e-30 else np.inf
 
+    # Simulate fitted sensorgram for plotting
+    R_fit = simulate_sensorgram(t, ka, kd, Rmax,
+                                c_func, R0=R0)
+
     result['ka'] = ka
     result['kd'] = kd
     result['Rmax'] = Rmax
@@ -211,6 +215,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
 
     result['c_func'] = c_func
     result['c_raw'] = c_raw
+    result['R_fit'] = R_fit
     result['R_smooth'] = R_smooth
     result['dRdt'] = dRdt
     result['t'] = t

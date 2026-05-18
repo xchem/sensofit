@@ -55,6 +55,8 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
         One row per sample per channel with kinetic parameters and metadata.
     data : dict
         Raw data dict (same shape as :func:`load_cxw`) for downstream use.
+    results : list[dict or None]
+        List of fit result dicts (one per sample), or None for failed fits.
     """
     data = load_experiment(filepath, channels=channels)
     samples = data['samples']
@@ -67,6 +69,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     fit_func = dk_fit_sample if mode == 'dk' else ode_fit_sample
 
     rows = []
+    results = []
     n = len(samples)
     if n == 0:
         print(f"No samples found in file: {filepath}.")
@@ -108,9 +111,11 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
             if mode == 'ode':
                 kwargs['n_starts'] = n_starts
             result = fit_func(sample, ch_dmso, **kwargs)
+            results.append(result)
             row = _extract_row(sample, result, mode)
             row['fit_error'] = None
         except Exception as e:
+            results.append(None)
             row = _fallback_row(sample, mode)
             row['fit_error'] = str(e)
 
@@ -130,7 +135,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     df.sort_values(['compound', 'concentration_M'], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
-    return df, data
+    return df, data, results
 
 
 def _extract_row(sample, result, mode):

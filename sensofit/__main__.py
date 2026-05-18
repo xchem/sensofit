@@ -50,7 +50,7 @@ def _find_cxw_files(path):
     sys.exit(1)
 
 
-def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
+def _run_mode(filepath, mode, n_starts, skip_nsb, output_dir, channels='all'):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -59,8 +59,8 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
     print(f'Mode: {mode.upper()}')
     print(f'{"=" * 60}')
 
-    df, data = batch_fit(filepath, mode=mode, include_nsb=not skip_nsb,
-                         channels=channels, progress=True)
+    df, data, results = batch_fit(filepath, mode=mode, include_nsb=not skip_nsb,
+                         channels=channels, progress=True, n_starts=n_starts)
     if df.empty:
         return df
     
@@ -78,53 +78,13 @@ def _run_mode(filepath, mode, skip_nsb, output_dir, channels='all'):
 
     # Save plots
     samples = data['samples']
-    dmso_cals = data['dmso_cals']
-    blanks = data['blanks']
-    matched_results = []
-    for _, row in df.iterrows():
-        idx = row.get('cycle_index')
-        ch = row.get('channel', '')
-        match = [s for s in samples
-                 if s['index'] == idx and s.get('channel', '') == ch]
-        if not match:
-            matched_results.append(None)
-            continue
-        sample = match[0]
-        if row.get('nonspecific', False) or not row.get('success', False):
-            matched_results.append(None)
-        else:
-            try:
-                if mode == 'dk':
-                    from .direct_kinetics import fit_sample as fit_fn
-                else:
-                    from .ode_fitting import fit_sample as fit_fn
-                # Channel-matched DMSO/blanks
-                ch_dmso = [d for d in dmso_cals if d.get('channel') == ch]
-                ch_blanks = [b for b in blanks if b.get('channel') == ch]
-                result = fit_fn(sample, ch_dmso or dmso_cals,
-                                blanks=ch_blanks or blanks)
-                matched_results.append(result)
-            except Exception:
-                matched_results.append(None)
 
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
-    matched_samples = []
-    for _, row in df.iterrows():
-        idx = row.get('cycle_index')
-        ch = row.get('channel', '')
-        match = [s for s in samples
-                 if s['index'] == idx and s.get('channel', '') == ch]
-        if match:
-            matched_samples.append(match[0])
-        else:
-            matched_samples.append({'compound': 'Unknown', 'concentration_M': 0,
-                                    'index': idx, 'channel': ch})
-
-    if results:
-        paths = save_fit_plots(results, matched_samples,
-                               plot_dir, mode=mode)
-        n_plots = sum(1 for p in paths if p is not None)
-        print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
+    paths = save_fit_plots(df, samples, results,
+                            plot_dir, mode=mode)
+    ### WARNING! FIGURE DID NOT SAVE, CHECK CODE ABOVE
+    n_plots = sum(1 for p in paths if p is not None)
+    print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 
     return df
 
@@ -200,6 +160,11 @@ def main(argv=None):
         help='Fitting mode: dk (fast), ode (full), or both. Default: ode.',
     )
     parser.add_argument(
+        '--n-starts', type=int, default=3,
+        help='Number of starting points for ODE multi-start refinement. '
+             'Ignored when mode=dk. Default: 3.',
+    )
+    parser.add_argument(
         '--output', '-o', default='results',
         help='Output directory for CSV and plots. Default: results/',
     )
@@ -227,8 +192,8 @@ def main(argv=None):
 
     for filepath in cxw_files:
         for mode in modes:
-            df = _run_mode(filepath, mode, skip_nsb, args.output,
-                          channels=channels)
+            df = _run_mode(filepath, mode, args.n_starts, skip_nsb,
+                           args.output, channels=channels)
             if df.empty:
                 continue
             all_dfs.append(df)

@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def plot_fit(result, sample, ax=None, title=None):
+def plot_fit(result, sample, mode='ode', ax=None, title=None):
     """Plot data vs model fit for a single sample.
 
     Parameters
@@ -43,11 +43,11 @@ def plot_fit(result, sample, ax=None, title=None):
     if R_fit is not None:
         # ODE mode: R_fit has NaN outside fit window
         mask = np.isfinite(R_fit)
-        ax.plot(t[mask], R_fit[mask], color='red', linewidth=1.2,
-                label='ODE fit')
-    elif 'R_smooth' in result:
+        ax.plot(t[mask], R_fit[mask], color='red' if mode == 'ode' else 'blue', linewidth=1.2,
+                linestyle='--', label='ODE fit')
+    if 'R_smooth' in result:
         # DK mode: plot smoothed signal
-        ax.plot(t, result['R_smooth'], color='blue', linewidth=1.0,
+        ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
                 linestyle='--', label='DK smooth')
 
     # Labels
@@ -95,15 +95,17 @@ def plot_fit(result, sample, ax=None, title=None):
     return fig
 
 
-def save_fit_plots(results, samples, output_dir, mode='ode'):
+def save_fit_plots(df, samples, results, output_dir, mode='ode'):
     """Save individual fit plots as PNGs.
 
     Parameters
     ----------
-    results : list[dict]
-        Fit result dicts, one per sample (same order as *samples*).
+    df : pandas.DataFrame
+        DataFrame containing fit results.
     samples : list[dict]
         Sample cycle dicts from ``load_cxw()``.
+    results : list[dict or None]
+        List of fit result dicts (one per sample), or None for failed fits.
     output_dir : str
         Directory to write PNG files into (created if needed).
     mode : str
@@ -117,11 +119,18 @@ def save_fit_plots(results, samples, output_dir, mode='ode'):
     os.makedirs(output_dir, exist_ok=True)
     paths = []
 
-    for i, (result, sample) in enumerate(zip(results, samples)):
-        if result is None:
+    for i, row in df.iterrows():
+        idx = row.get('cycle_index')
+        ch = row.get('channel', '')
+        match_sample = [s for s in samples
+                 if s['index'] == idx and s.get('channel', '') == ch]
+        if len(match_sample) > 1:
+            print(f'WARNING! Multiple samples with cycle number {idx} and channel {ch}, plotting only the first match.')
+        elif len(match_sample) == 0:
+            print(f'WARNING! No sample found with cycle number {idx} and channel {ch}, skipping plot.')
             paths.append(None)
             continue
-
+        sample = match_sample[0]
         compound = sample.get('compound', 'Unknown')
         channel = sample.get('channel', '')
         # Sanitise compound name for filename
@@ -131,10 +140,15 @@ def save_fit_plots(results, samples, output_dir, mode='ode'):
         parts = [f'{idx:03d}', safe_name]
         if safe_ch:
             parts.append(safe_ch)
-        fname = '_'.join(parts) + '.png'
+        fname = '_'.join(parts) + '_' + mode.upper() + '.png'
         fpath = os.path.join(output_dir, fname)
 
-        fig = plot_fit(result, sample)
+        result = results[i]
+        if result is None:
+            print(f'WARNING! No fit result for sample with cycle number {idx} and channel {ch}, skipping plot.')
+            paths.append(None)
+            continue
+        fig = plot_fit(result, sample, mode=mode)
         if fig is not None:
             fig.savefig(fpath, dpi=150, bbox_inches='tight')
             plt.close(fig)
