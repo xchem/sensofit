@@ -325,7 +325,7 @@ def _extract_cycles(rk_series: list[ET.Element], reagent_lookups: list[dict],
                     return None
 
             cycles.append({
-                'serie_id': i+1,
+                'rk_serie_id': i+1,
                 'index': int(cyc.findtext('Index', '-1')),
                 'cycle_type': cycle_type,
                 'guid': cyc.findtext('Guid', ''),
@@ -490,7 +490,7 @@ def _extract_buffers(rk_series: list[ET.Element]) -> list[dict]:
     for i, rk_serie in enumerate(rk_series):
         for b in rk_serie.findall('.//Buffers/Buffer'):
             out.append({
-                'serie_id': i+1,
+                'rk_serie_id': i+1,
                 'id': (b.findtext('Id') or '').strip(),
                 'inlet': (b.findtext('Inlet') or '').strip(),
                 'name': (b.findtext('Name') or '').strip(),
@@ -504,44 +504,48 @@ def _extract_autosampler(rk_series: list[ET.Element]) -> list[dict]:
     if not rk_series:
         return out
     for i, rk_serie in enumerate(rk_series):
-        serie = {'serie_id': i+1, 'racks': [], 'reagents': []}
+        serie = {'rk_serie_id': i+1, 'racks': [], 'reagents': []}
+        if rk_serie is None:
+            out.append(serie)
+            continue
         asv = rk_serie.find('AutosamplerVM')
         if asv is None:
+            out.append(serie)
             continue
         for rack_tag in ('LeftRack', 'RightRack'):
             rack = asv.find(rack_tag)
-        if rack is None:
-            continue
-        rc = rack.find('.//RackConfig')
-        rack_info = {
-            'side': rack_tag.replace('Rack', ''),
-            'use_single_well': rack.get('UseSingleWell', ''),
-            'columns': rc.get('Columns', '') if rc is not None else '',
-            'rows': rc.get('Rows', '') if rc is not None else '',
-            'rack_volume_uL': rc.get('Volume', '') if rc is not None else '',
-            'well_volume_uL': (rack.findtext('WellVolume') or '').strip(),
-        }
-        serie['racks'].append(rack_info)
-        for r in rack.findall('.//Reagent'):
-            try:
-                vol = float(r.get('Volume', '0') or '0')
-            except ValueError:
-                vol = 0.0
-            conc_raw = r.get('Concentration', '')
-            try:
-                conc_M = _parse_concentration(conc_raw or '0')
-            except ValueError:
-                conc_M = None  # e.g. '0.5 %' DMSO
-            serie['reagents'].append({
+            if rack is None:
+                continue
+            rc = rack.find('.//RackConfig')
+            rack_info = {
                 'side': rack_tag.replace('Rack', ''),
-                'slot': r.get('Slot', ''),
-                'designation': r.get('Designation', ''),
-                'category': r.get('Category', ''),
-                'concentration_M': conc_M,
-                'concentration_raw': conc_raw,
-                'mw_Da': _parse_mw(r.get('MW', '0')),
-                'volume_uL': vol,
-            })
+                'use_single_well': rack.get('UseSingleWell', ''),
+                'columns': rc.get('Columns', '') if rc is not None else '',
+                'rows': rc.get('Rows', '') if rc is not None else '',
+                'rack_volume_uL': rc.get('Volume', '') if rc is not None else '',
+                'well_volume_uL': (rack.findtext('WellVolume') or '').strip(),
+            }
+            serie['racks'].append(rack_info)
+            for r in rack.findall('.//Reagent'):
+                try:
+                    vol = float(r.get('Volume', '0') or '0')
+                except ValueError:
+                    vol = 0.0
+                conc_raw = r.get('Concentration', '')
+                try:
+                    conc_M = _parse_concentration(conc_raw or '0')
+                except ValueError:
+                    conc_M = None  # e.g. '0.5 %' DMSO
+                serie['reagents'].append({
+                    'side': rack_tag.replace('Rack', ''),
+                    'slot': r.get('Slot', ''),
+                    'designation': r.get('Designation', ''),
+                    'category': r.get('Category', ''),
+                    'concentration_M': conc_M,
+                    'concentration_raw': conc_raw,
+                    'mw_Da': _parse_mw(r.get('MW', '0')),
+                    'volume_uL': vol,
+                })
         out.append(serie)
     return out
 
@@ -558,7 +562,7 @@ def _extract_immobilization(project_root: ET.Element,
             info.append(None)
             continue
         info.append({
-            'serie_id': i+1,
+            'rk_serie_id': i+1,
             'name': (rk_serie.findtext('Name') or '').strip(),
             'guid': (rk_serie.findtext('Guid') or '').strip(),
             'measurement_start': (
@@ -591,7 +595,7 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
             except ValueError:
                 avg = None
             out.append({
-                'serie_id': i+1,
+                'rk_serie_id': i+1,
                 'name': _t('Name'),
                 'marker': _t('MarkerType'),
                 'shift_s': shift,
@@ -809,7 +813,7 @@ def load_cxw(filepath: str, channels='all') -> dict:
                     f'No matching channels. Requested {channels}, '
                     f'available active FCs: {avail}')
 
-        # Find RAPID Kinetics serie
+        # Find RAPID Kinetics series
         rk_series = []
         rk_guids = []
         for serie in project.findall('.//Serie'):

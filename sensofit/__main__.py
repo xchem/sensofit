@@ -202,13 +202,15 @@ def main(argv=None):
     combined = pd.concat(all_dfs, ignore_index=True)
 
     # Reorder columns: source_file, cycle_index, compound first
-    priority = ['source_file', 'cycle_index', 'channel', 'compound',
+    priority = ['source_file', 'rk_serie_id', 'cycle_index', 'channel', 'compound',
                 'concentration_M', 'concentration_uM', 'fit_mode',
                 'ka', 'kd', 'KD', 'KD_uM',
                 'Rmax', 'sigma_res', 'flag', 'flag_reason']
     ordered = [c for c in priority if c in combined.columns]
     remaining = [c for c in combined.columns if c not in ordered]
     combined = combined[ordered + remaining]
+    combined.sort_values(['rk_serie_id','cycle_index', 'channel'],
+                         inplace=True)
 
     csv_path = os.path.join(args.output, 'batch_results.csv')
     combined.to_csv(csv_path, index=False)

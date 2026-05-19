@@ -85,10 +85,11 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
                   f'{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining',
                   end='', flush=True)
 
-        # Filter DMSO cals and blanks to same channel
+        # Filter DMSO cals and blanks to same channel and same rk_serie
+        rk_serie = sample.get('rk_serie_id')
         ch = sample.get('channel')
-        ch_dmso = [d for d in dmso_cals if d.get('channel') == ch]
-        ch_blanks = [b for b in blanks if b.get('channel') == ch]
+        ch_dmso = [d for d in dmso_cals if d.get('channel') == ch and d.get('rk_serie_id') == rk_serie]
+        ch_blanks = [b for b in blanks if b.get('channel') == ch and b.get('rk_serie_id') == rk_serie]
         # Fallback: if no channel-matched cals, use all (single-channel files)
         if not ch_dmso:
             ch_dmso = dmso_cals
@@ -98,6 +99,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
         # Check for non-specific binding before fitting
         nsb, ref_dissoc = is_nonspecific_binder(sample)
         if nsb and not include_nsb:
+            results.append(None)
             row = _fallback_row(sample, mode)
             row['fit_mode'] = 'nsb'
             row['fit_error'] = None
@@ -127,7 +129,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     if progress:
         elapsed = time.time() - t0
         print(f'\r  Done: {n} samples in {elapsed:.1f}s '
-              f'({elapsed/n:.1f}s/sample)' + ' ' * 30)
+              f'({elapsed/n:.1f}s/sample) \n')
 
     df = pd.DataFrame(rows)
 
@@ -148,6 +150,7 @@ def _extract_row(sample, result, mode):
         'slot':            sample.get('slot'),
         'cycle_index':     sample['index'],
         'channel':         sample.get('channel', ''),
+        'rk_serie_id':    sample.get('rk_serie_id'),
     }
 
     if mode == 'dk':
@@ -206,6 +209,7 @@ def _fallback_row(sample, mode):
         'slot':            sample.get('slot'),
         'cycle_index':     sample['index'],
         'channel':         sample.get('channel', ''),
+        'rk_serie_id':    sample.get('rk_serie_id'),
         'ka':              np.nan,
         'kd':              np.nan,
         'Rmax':            np.nan,

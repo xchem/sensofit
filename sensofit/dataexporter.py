@@ -590,7 +590,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('')
             for imm in immob:
                 if imm.get('name'):
-                    lines.append(f'- Serie ID: {imm["serie_id"]}')
+                    lines.append(f'- Serie ID: {imm["rk_serie_id"]}')
                     lines.append(f'- Serie name: {imm["name"]}')
                 if imm.get('capture_fcs'):
                     fcs = ', '.join(f'FC{n}' for n in imm['capture_fcs'])
@@ -608,7 +608,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('| Id | Inlet | Name |')
             lines.append('|---|---|---|')
             for b in buffers:
-                lines.append(f'| {b.get("serie_id","")} | {b.get("id","")} | '
+                lines.append(f'| {b.get("rk_serie_id","")} | {b.get("id","")} | '
                              f'{b.get("inlet","")} | {b.get("name","") or "—"} |')
 
         rps = s.get('report_points') or []

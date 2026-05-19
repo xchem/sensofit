@@ -122,22 +122,24 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode'):
     for i, row in df.iterrows():
         idx = row.get('cycle_index')
         ch = row.get('channel', '')
+        rk_serie = row.get('rk_serie_id', '')
         match_sample = [s for s in samples
-                 if s['index'] == idx and s.get('channel', '') == ch]
+                 if s['index'] == idx and s.get('channel', '') == ch and s.get('rk_serie_id', '') == rk_serie]
         if len(match_sample) > 1:
-            print(f'WARNING! Multiple samples with cycle number {idx} and channel {ch}, plotting only the first match.')
+            print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
         elif len(match_sample) == 0:
-            print(f'WARNING! No sample found with cycle number {idx} and channel {ch}, skipping plot.')
+            print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
             paths.append(None)
             continue
         sample = match_sample[0]
         compound = sample.get('compound', 'Unknown')
-        channel = sample.get('channel', '')
+        channel = sample.get('channel', ch)
+        idx = sample.get('index', idx)
+        rk_serie = sample.get('rk_serie_id', rk_serie)
         # Sanitise compound name for filename
         safe_name = _sanitise_filename(compound)
         safe_ch = _sanitise_filename(channel) if channel else ''
-        idx = sample.get('index', i)
-        parts = [f'{idx:03d}', safe_name]
+        parts = [f'RK{rk_serie:02d}', f'{idx:03d}', safe_name]
         if safe_ch:
             parts.append(safe_ch)
         fname = '_'.join(parts) + '_' + mode.upper() + '.png'
@@ -145,7 +147,7 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode'):
 
         result = results[i]
         if result is None:
-            print(f'WARNING! No fit result for sample with cycle number {idx} and channel {ch}, skipping plot.')
+            print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
             paths.append(None)
             continue
         fig = plot_fit(result, sample, mode=mode)
