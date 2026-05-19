@@ -50,7 +50,7 @@ def _find_cxw_files(path):
     sys.exit(1)
 
 
-def _run_mode(filepath, mode, n_starts, skip_nsb, output_dir, channels='all'):
+def _run_mode(filepath, mode, n_starts, skip_nsb, output_dir, channels='all', n_parallel_jobs=None):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -60,7 +60,7 @@ def _run_mode(filepath, mode, n_starts, skip_nsb, output_dir, channels='all'):
     print(f'{"=" * 60}')
 
     df, data, results = batch_fit(filepath, mode=mode, include_nsb=not skip_nsb,
-                         channels=channels, progress=True, n_starts=n_starts)
+                         channels=channels, progress=True, n_starts=n_starts, n_parallel_jobs=n_parallel_jobs)
     if df.empty:
         return df
     
@@ -81,8 +81,7 @@ def _run_mode(filepath, mode, n_starts, skip_nsb, output_dir, channels='all'):
 
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
     paths = save_fit_plots(df, samples, results,
-                            plot_dir, mode=mode)
-    ### WARNING! FIGURE DID NOT SAVE, CHECK CODE ABOVE
+                            plot_dir, mode=mode, n_parallel_jobs=n_parallel_jobs)
     n_plots = sum(1 for p in paths if p is not None)
     print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 
@@ -165,6 +164,10 @@ def main(argv=None):
              'Ignored when mode=dk. Default: 3.',
     )
     parser.add_argument(
+        '--n-parallel-jobs', type=int, default=None,
+        help='Number of parallel jobs to run. Default: None (not using parallelization).',
+    )
+    parser.add_argument(
         '--output', '-o', default='results',
         help='Output directory for CSV and plots. Default: results/',
     )
@@ -193,7 +196,7 @@ def main(argv=None):
     for filepath in cxw_files:
         for mode in modes:
             df = _run_mode(filepath, mode, args.n_starts, skip_nsb,
-                           args.output, channels=channels)
+                           args.output, channels=channels, n_parallel_jobs=args.n_parallel_jobs)
             if df.empty:
                 continue
             all_dfs.append(df)

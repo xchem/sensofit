@@ -12,6 +12,7 @@ with one row per sample and columns for all kinetic parameters.
 import time
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
 from .models import is_nonspecific_binder
@@ -20,7 +21,7 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 
 def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
-              progress=True, n_starts=3):
+              progress=True, n_starts=3, n_parallel_jobs=None):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -68,63 +69,24 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
 
     fit_func = dk_fit_sample if mode == 'dk' else ode_fit_sample
 
-    rows = []
-    results = []
     n = len(samples)
     if n == 0:
         print(f"No samples found in file: {filepath}.")
         return pd.DataFrame(), data
     t0 = time.time()
 
-    for i, sample in enumerate(samples):
-        if progress:
-            elapsed = time.time() - t0
-            eta = (elapsed / (i + 1)) * (n - i - 1) if i > 0 else 0
-            ch_label = sample.get('channel', '')
-            print(f'\r  [{i+1}/{n}] {sample["compound"]:20s} {ch_label:8s} '
-                  f'{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining',
-                  end='', flush=True)
+    if n_parallel_jobs:
+        print(f'Fitting {n} samples in {mode.upper()} mode with {n_parallel_jobs} parallel jobs...')
+        all_results = Parallel(n_jobs=n_parallel_jobs)(
+            delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb,
+                                   mode, fit_func, n_starts) for i, sample in enumerate(samples)
+        )
+    else:
+        all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb,
+                                      mode, fit_func, n_starts) for i, sample in enumerate(samples)]
 
-        # Filter DMSO cals and blanks to same channel and same rk_serie
-        rk_serie = sample.get('rk_serie_id')
-        ch = sample.get('channel')
-        ch_dmso = [d for d in dmso_cals if d.get('channel') == ch and d.get('rk_serie_id') == rk_serie]
-        ch_blanks = [b for b in blanks if b.get('channel') == ch and b.get('rk_serie_id') == rk_serie]
-        # Fallback: if no channel-matched cals, use all (single-channel files)
-        if not ch_dmso:
-            ch_dmso = dmso_cals
-        if not ch_blanks:
-            ch_blanks = blanks
-
-        # Check for non-specific binding before fitting
-        nsb, ref_dissoc = is_nonspecific_binder(sample)
-        if nsb and not include_nsb:
-            results.append(None)
-            row = _fallback_row(sample, mode)
-            row['fit_mode'] = 'nsb'
-            row['fit_error'] = None
-            row['nonspecific'] = True
-            row['ref_dissoc'] = ref_dissoc
-            rows.append(row)
-            continue
-
-        try:
-            kwargs = {'blanks': ch_blanks}
-            if mode == 'ode':
-                kwargs['n_starts'] = n_starts
-            result = fit_func(sample, ch_dmso, **kwargs)
-            results.append(result)
-            row = _extract_row(sample, result, mode)
-            row['fit_error'] = None
-        except Exception as e:
-            results.append(None)
-            row = _fallback_row(sample, mode)
-            row['fit_error'] = str(e)
-
-        row['nonspecific'] = False
-        row['ref_dissoc'] = ref_dissoc
-
-        rows.append(row)
+    results = [r[0] for r in all_results]
+    rows = [r[1] for r in all_results]
 
     if progress:
         elapsed = time.time() - t0
@@ -139,6 +101,54 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
 
     return df, data, results
 
+
+def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb, mode, fit_func, n_starts):
+    """Process a single sample with error handling and NSB filtering."""
+    if progress:
+        elapsed = time.time() - t0
+        eta = (elapsed / (i + 1)) * (n - i - 1) if i > 0 else 0
+        ch_label = sample.get('channel', '')
+        print(f'\r  [{i+1}/{n}] {sample["compound"]:20s} {ch_label:8s} '
+                f'{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining',
+                end='', flush=True)
+
+    # Filter DMSO cals and blanks to same channel and same rk_serie
+    rk_serie = sample.get('rk_serie_id')
+    ch = sample.get('channel')
+    ch_dmso = [d for d in dmso_cals if d.get('channel') == ch and d.get('rk_serie_id') == rk_serie]
+    ch_blanks = [b for b in blanks if b.get('channel') == ch and b.get('rk_serie_id') == rk_serie]
+    # Fallback: if no channel-matched cals, use all (single-channel files)
+    if not ch_dmso:
+        ch_dmso = dmso_cals
+    if not ch_blanks:
+        ch_blanks = blanks
+
+    # Check for non-specific binding before fitting
+    nsb, ref_dissoc = is_nonspecific_binder(sample)
+    if nsb and not include_nsb:
+        row = _fallback_row(sample, mode)
+        row['fit_mode'] = 'nsb'
+        row['fit_error'] = None
+        row['nonspecific'] = True
+        row['ref_dissoc'] = ref_dissoc
+        return [None, row]
+
+    try:
+        kwargs = {'blanks': ch_blanks}
+        if mode == 'ode':
+            kwargs['n_starts'] = n_starts
+        result = fit_func(sample, ch_dmso, **kwargs)
+        row = _extract_row(sample, result, mode)
+        row['fit_error'] = None
+    except Exception as e:
+        row = _fallback_row(sample, mode)
+        row['fit_error'] = str(e)
+        return [None, row]
+
+    row['nonspecific'] = False
+    row['ref_dissoc'] = ref_dissoc
+
+    return [result, row]
 
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""

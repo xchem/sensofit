@@ -6,6 +6,7 @@ showing compound name, ka, kd, and KD values.
 
 import os
 import numpy as np
+from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 
 
@@ -95,7 +96,7 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
     return fig
 
 
-def save_fit_plots(df, samples, results, output_dir, mode='ode'):
+def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs=None):
     """Save individual fit plots as PNGs.
 
     Parameters
@@ -117,48 +118,55 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode'):
         File paths of the saved PNGs.
     """
     os.makedirs(output_dir, exist_ok=True)
-    paths = []
-
-    for i, row in df.iterrows():
-        idx = row.get('cycle_index')
-        ch = row.get('channel', '')
-        rk_serie = row.get('rk_serie_id', '')
-        match_sample = [s for s in samples
-                 if s['index'] == idx and s.get('channel', '') == ch and s.get('rk_serie_id', '') == rk_serie]
-        if len(match_sample) > 1:
-            print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
-        elif len(match_sample) == 0:
-            print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
-            paths.append(None)
-            continue
-        sample = match_sample[0]
-        compound = sample.get('compound', 'Unknown')
-        channel = sample.get('channel', ch)
-        idx = sample.get('index', idx)
-        rk_serie = sample.get('rk_serie_id', rk_serie)
-        # Sanitise compound name for filename
-        safe_name = _sanitise_filename(compound)
-        safe_ch = _sanitise_filename(channel) if channel else ''
-        parts = [f'RK{rk_serie:02d}', f'{idx:03d}', safe_name]
-        if safe_ch:
-            parts.append(safe_ch)
-        fname = '_'.join(parts) + '_' + mode.upper() + '.png'
-        fpath = os.path.join(output_dir, fname)
-
-        result = results[i]
-        if result is None:
-            print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
-            paths.append(None)
-            continue
-        fig = plot_fit(result, sample, mode=mode)
-        if fig is not None:
-            fig.savefig(fpath, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            paths.append(fpath)
-        else:
-            paths.append(None)
+    
+    if n_parallel_jobs:
+        print(f'  Saving plots in parallel using {n_parallel_jobs} jobs...')
+        paths = Parallel(n_jobs=n_parallel_jobs)(
+            delayed(_save_fit_process)(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()
+        )
+    else:
+        paths = [_save_fit_process(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()]        
 
     return paths
+
+
+def _save_fit_process(i, row, samples, mode, output_dir, results):
+    """Helper for multiprocessing save_fit_plots."""
+    idx = row.get('cycle_index')
+    ch = row.get('channel', '')
+    rk_serie = row.get('rk_serie_id', '')
+    match_sample = [s for s in samples if s['index'] == idx and s.get('channel', '') == ch and s.get('rk_serie_id', '') == rk_serie]
+    if len(match_sample) > 1:
+        print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
+    elif len(match_sample) == 0:
+        print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
+        return None
+    sample = match_sample[0]
+    compound = sample.get('compound', 'Unknown')
+    channel = sample.get('channel', ch)
+    idx = sample.get('index', idx)
+    rk_serie = sample.get('rk_serie_id', rk_serie)
+    # Sanitise compound name for filename
+    safe_name = _sanitise_filename(compound)
+    safe_ch = _sanitise_filename(channel) if channel else ''
+    parts = [f'RK{rk_serie:02d}', f'{idx:03d}', safe_name]
+    if safe_ch:
+        parts.append(safe_ch)
+    fname = '_'.join(parts) + '_' + mode.upper() + '.png'
+    fpath = os.path.join(output_dir, fname)
+
+    result = results[i]
+    if result is None:
+        print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
+        return None
+    fig = plot_fit(result, sample, mode=mode)
+    if fig is not None:
+        fig.savefig(fpath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return fpath
+    else:
+        return None
+    
 
 
 def _sanitise_filename(name):
