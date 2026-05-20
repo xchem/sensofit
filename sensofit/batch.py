@@ -76,7 +76,6 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     t0 = time.time()
 
     if n_parallel_jobs:
-        print(f'Fitting {n} samples in {mode.upper()} mode with {n_parallel_jobs} parallel jobs...')
         all_results = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb,
                                    mode, fit_func, n_starts) for i, sample in enumerate(samples)
