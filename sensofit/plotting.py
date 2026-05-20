@@ -121,7 +121,7 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs
     
     if n_parallel_jobs:
         print(f'  Saving plots in parallel using {n_parallel_jobs} jobs...')
-        paths = Parallel(n_jobs=n_parallel_jobs)(
+        paths = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
             delayed(_save_fit_process)(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()
         )
     else:
