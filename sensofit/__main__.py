@@ -196,7 +196,7 @@ def main(argv=None):
     for filepath in cxw_files:
         for mode in modes:
             df = _run_mode(filepath, mode, args.n_starts, skip_nsb,
-                           args.output, channels=channels, n_parallel_jobs=args.n_parallel_jobs if mode != 'dk' else None)
+                           args.output, channels=channels, n_parallel_jobs=args.n_parallel_jobs)
             if df.empty:
                 continue
             all_dfs.append(df)

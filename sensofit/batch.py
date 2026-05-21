@@ -67,6 +67,8 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     if mode not in ('dk', 'ode'):
         raise ValueError(f"mode must be 'dk' or 'ode', got {mode!r}")
 
+    n_parallel_jobs = n_parallel_jobs if mode != 'dk' else None
+
     fit_func = dk_fit_sample if mode == 'dk' else ode_fit_sample
 
     n = len(samples)
