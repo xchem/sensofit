@@ -201,7 +201,7 @@ def _detect_channels_legacy(project_root: ET.Element):
 # Wizard (reagent) lookup
 # ---------------------------------------------------------------------------
 
-def _build_reagent_lookup(zf: zipfile.ZipFile, serie_guid: str) -> dict:
+def  _build_reagent_lookup(zf: zipfile.ZipFile, serie_guids: list[str]) -> list[dict]:
     """Parse the RAPID Kinetics Wizard to build a ``(side, slot) → reagent``
     lookup.
 
@@ -213,138 +213,144 @@ def _build_reagent_lookup(zf: zipfile.ZipFile, serie_guid: str) -> dict:
     Control / Blank / DMSO cycles — which typically run from the Right
     rack — pick up the correct reagent.
     """
-    lookup = {}
-    for fname in zf.namelist():
-        if not fname.startswith('Wizard/'):
-            continue
-        wiz = _parse_xml(zf, fname)
-        if wiz.findtext('SerieId') != serie_guid:
-            continue
-        for rack_tag, side in (('LeftRack', 'Left'), ('RightRack', 'Right')):
-            rack = wiz.find(rack_tag)
-            if rack is None:
+    lookups = []
+    for serie_guid in serie_guids:
+        lookup = {}
+        for fname in zf.namelist():
+            if not fname.startswith('Wizard/'):
                 continue
-            for r in rack.findall('.//Reagent'):
-                slot = r.get('Slot', '')
-                if not slot:
+            wiz = _parse_xml(zf, fname)
+            if wiz.findtext('SerieId') != serie_guid:
+                continue
+            for rack_tag, side in (('LeftRack', 'Left'), ('RightRack', 'Right')):
+                rack = wiz.find(rack_tag)
+                if rack is None:
                     continue
-                try:
-                    vol = float(r.get('Volume', '0') or '0')
-                except ValueError:
-                    vol = 0.0
-                try:
-                    conc_M = _parse_concentration(
-                        r.get('Concentration', '0'))
-                except ValueError:
-                    conc_M = 0.0
-                lookup[(side, slot)] = {
-                    'compound': r.get('Designation', ''),
-                    'concentration_M': conc_M,
-                    'mw': _parse_mw(r.get('MW', '0')),
-                    'category': r.get('Category', ''),
-                    'volume_uL': vol,
-                }
-        break  # found the right wizard
-    return lookup
+                for r in rack.findall('.//Reagent'):
+                    slot = r.get('Slot', '')
+                    if not slot:
+                        continue
+                    try:
+                        vol = float(r.get('Volume', '0') or '0')
+                    except ValueError:
+                        vol = 0.0
+                    try:
+                        conc_M = _parse_concentration(
+                            r.get('Concentration', '0'))
+                    except ValueError:
+                        conc_M = 0.0
+                    lookup[(side, slot)] = {
+                        'compound': r.get('Designation', ''),
+                        'concentration_M': conc_M,
+                        'mw': _parse_mw(r.get('MW', '0')),
+                        'category': r.get('Category', ''),
+                        'volume_uL': vol,
+                    }
+            break  # found the right wizard
+        lookups.append(lookup)
+    return lookups
 
 
 # ---------------------------------------------------------------------------
 # Cycle metadata extraction
 # ---------------------------------------------------------------------------
 
-def _extract_cycles(serie_el: ET.Element, reagent_lookup: dict,
-                    autosampler_lookup: dict | None = None) -> list[dict]:
+def _extract_cycles(rk_series: list[ET.Element], reagent_lookups: list[dict],
+                    autosampler_lookups: list[dict] | None = None) -> list[dict]:
     """Extract ordered cycle metadata from a Serie element.
 
     ``autosampler_lookup`` (optional) is keyed by ``(side, slot)`` and
     supplies the populated ``category`` and ``volume_uL`` values that the
     Wizard placeholders lack.
     """
-    autosampler_lookup = autosampler_lookup or {}
+    if len(autosampler_lookups) != len(rk_series):
+        autosampler_lookups = [{} for _ in rk_series]
     cycles = []
-    for cyc in serie_el.find('Cycles').findall('Cycle'):
-        ct_el = cyc.find('CycleType')
-        cycle_type = ct_el.text if ct_el is not None else ''
+    for i, (rk_serie, r_lookup, as_lookup) in enumerate(zip(rk_series, reagent_lookups, autosampler_lookups)):
+        for cyc in rk_serie.find('Cycles').findall('Cycle'):
+            ct_el = cyc.find('CycleType')
+            cycle_type = ct_el.text if ct_el is not None else ''
 
-        # Autosampler slot + side
-        slot_el = cyc.find('.//AutosamplerLocation')
-        slot = slot_el.get('Slot', '') if slot_el is not None else ''
-        slot_side = slot_el.get('Side', '') if slot_el is not None else ''
+            # Autosampler slot + side
+            slot_el = cyc.find('.//AutosamplerLocation')
+            slot = slot_el.get('Slot', '') if slot_el is not None else ''
+            slot_side = slot_el.get('Side', '') if slot_el is not None else ''
 
-        # Reagent info: wizard provides compound/conc/MW per (side, slot);
-        # the autosampler reagent table carries the real category/volume
-        # (the wizard ones are placeholders).
-        reagent = dict(reagent_lookup.get((slot_side, slot), {}))
-        as_info = autosampler_lookup.get((slot_side, slot), {})
-        # Prefer autosampler designation if wizard is empty (e.g. side
-        # mismatch in legacy files where lookup keyed only on slot).
-        if not reagent.get('compound') and as_info.get('designation'):
-            reagent['compound'] = as_info['designation']
-            if as_info.get('mw_Da'):
-                reagent['mw'] = as_info['mw_Da']
-            if as_info.get('concentration_M') is not None:
-                reagent['concentration_M'] = as_info['concentration_M']
-        category = as_info.get('category') or reagent.get('category', '')
-        volume_uL = as_info.get('volume_uL', reagent.get('volume_uL', 0.0))
+            # Reagent info: wizard provides compound/conc/MW per (side, slot);
+            # the autosampler reagent table carries the real category/volume
+            # (the wizard ones are placeholders).
+            reagent = dict(r_lookup.get((slot_side, slot), {}))
+            as_info = as_lookup.get((slot_side, slot), {})
+            # Prefer autosampler designation if wizard is empty (e.g. side
+            # mismatch in legacy files where lookup keyed only on slot).
+            if not reagent.get('compound') and as_info.get('designation'):
+                reagent['compound'] = as_info['designation']
+                if as_info.get('mw_Da'):
+                    reagent['mw'] = as_info['mw_Da']
+                if as_info.get('concentration_M') is not None:
+                    reagent['concentration_M'] = as_info['concentration_M']
+            category = as_info.get('category') or reagent.get('category', '')
+            volume_uL = as_info.get('volume_uL', reagent.get('volume_uL', 0.0))
 
-        # Markers (Baseline, Injection, Rinse, RinseEnd, ...)
-        markers = {}
-        for marker in cyc.findall('.//Marker'):
-            mtype = marker.findtext('Type', '')
-            mx = float(marker.findtext('X', '0'))
-            if mtype:
-                markers[mtype] = mx
+            # Markers (Baseline, Injection, Rinse, RinseEnd, ...)
+            markers = {}
+            for marker in cyc.findall('.//Marker'):
+                mtype = marker.findtext('Type', '')
+                mx = float(marker.findtext('X', '0'))
+                if mtype:
+                    markers[mtype] = mx
 
-        # Pulse durations (kinetic-titration injections)
-        pulse_durations = []
-        pd_el = cyc.find('PulseDurations')
-        if pd_el is not None:
-            for d in pd_el.findall('double'):
+            # Pulse durations (kinetic-titration injections)
+            pulse_durations = []
+            pd_el = cyc.find('PulseDurations')
+            if pd_el is not None:
+                for d in pd_el.findall('double'):
+                    try:
+                        pulse_durations.append(float(d.text or '0'))
+                    except ValueError:
+                        pass
+
+            def _opt_float(tag):
+                v = cyc.findtext(tag, '')
                 try:
-                    pulse_durations.append(float(d.text or '0'))
+                    return float(v) if v else None
                 except ValueError:
-                    pass
+                    return None
 
-        def _opt_float(tag):
-            v = cyc.findtext(tag, '')
-            try:
-                return float(v) if v else None
-            except ValueError:
-                return None
+            def _opt_int(tag):
+                v = cyc.findtext(tag, '')
+                try:
+                    return int(v) if v else None
+                except ValueError:
+                    return None
 
-        def _opt_int(tag):
-            v = cyc.findtext(tag, '')
-            try:
-                return int(v) if v else None
-            except ValueError:
-                return None
-
-        cycles.append({
-            'index': int(cyc.findtext('Index', '-1')),
-            'cycle_type': cycle_type,
-            'guid': cyc.findtext('Guid', ''),
-            'name': cyc.findtext('Name', ''),
-            'slot': slot,
-            'slot_side': slot_side,
-            'compound': reagent.get('compound', ''),
-            'concentration_M': reagent.get('concentration_M', 0.0),
-            'mw': reagent.get('mw', 0.0),
-            'reagent_category': category,
-            'reagent_volume_uL': volume_uL,
-            'markers': markers,
-            'flow_rate_uLmin': _opt_float('FlowRate'),
-            'contact_time_s': _opt_float('ContactTime'),
-            'time_after_injection_s': _opt_float('TimeAfterInjection'),
-            'baseline_duration_s': _opt_float('BaselineDuration'),
-            'injection_mode': cyc.findtext('InjectionModeLabel', ''),
-            'pulse_durations_s': pulse_durations,
-            'chip_prime_mode': cyc.findtext('ChipPrimeModeLabel', ''),
-            'wash_mode': cyc.findtext('WashModeLabel', ''),
-            'buffer_inlet': cyc.findtext('Buffer', ''),
-            'block_id': _opt_int('BlockId'),
-            'state': cyc.findtext('State', ''),
-            'enabled': cyc.findtext('IsEnabled', '') == 'true',
-        })
+            cycles.append({
+                'rk_serie_id': i+1,
+                'index': int(cyc.findtext('Index', '-1')),
+                'cycle_type': cycle_type,
+                'guid': cyc.findtext('Guid', ''),
+                'name': cyc.findtext('Name', ''),
+                'slot': slot,
+                'slot_side': slot_side,
+                'compound': reagent.get('compound', ''),
+                'concentration_M': reagent.get('concentration_M', 0.0),
+                'mw': reagent.get('mw', 0.0),
+                'reagent_category': category,
+                'reagent_volume_uL': volume_uL,
+                'markers': markers,
+                'flow_rate_uLmin': _opt_float('FlowRate'),
+                'contact_time_s': _opt_float('ContactTime'),
+                'time_after_injection_s': _opt_float('TimeAfterInjection'),
+                'baseline_duration_s': _opt_float('BaselineDuration'),
+                'injection_mode': cyc.findtext('InjectionModeLabel', ''),
+                'pulse_durations_s': pulse_durations,
+                'chip_prime_mode': cyc.findtext('ChipPrimeModeLabel', ''),
+                'wash_mode': cyc.findtext('WashModeLabel', ''),
+                'buffer_inlet': cyc.findtext('Buffer', ''),
+                'block_id': _opt_int('BlockId'),
+                'state': cyc.findtext('State', ''),
+                'enabled': cyc.findtext('IsEnabled', '') == 'true',
+            })
     return cycles
 
 
@@ -397,156 +403,210 @@ def _extract_project_meta(zf: zipfile.ZipFile) -> dict:
 
 
 def _extract_instrument(project_root: ET.Element,
-                        rk_serie: ET.Element) -> dict:
+                        rk_series: list[ET.Element]) -> dict:
     """Instrument / firmware / software / run timing for the Pulse serie."""
     info = {
         'device_type': (project_root.findtext('DeviceType') or '').strip(),
         'wave_control_version': (
             project_root.findtext('WAVEcontrolLastSavedVersion') or '').strip(),
+        'n_series': len(rk_series),
     }
-    if rk_serie is None:
+    if not rk_series:
         return info
-    meta = rk_serie.find('Meta')
-    if meta is not None:
-        def _t(tag):
-            return (meta.findtext(tag) or '').strip()
-        fw = '.'.join(filter(None, [
-            _t('FirmwareMajorVersion'), _t('FirmwareMinorVersion'),
-            _t('FirmwareBuild'), _t('FirmwareRevision')]))
-        info.update({
-            'serial_number': _t('SerialNumber'),
-            'hardware_version': _t('HardwareVersion'),
-            'firmware_version': fw,
-            'serie_recorded_version': _t('WAVEcontrolSerieRecordedVersion'),
-            'measurement_start': _t('MeasurementStartTime'),
-            'measurement_end': _t('MeasurementEndTime'),
-        })
-    fc_temp = rk_serie.findtext('FCTemperature')
-    if fc_temp:
-        try:
-            info['fc_temperature_C'] = float(fc_temp)
-        except ValueError:
-            pass
-    rate = rk_serie.findtext('AcquisitionRate')
-    if rate:
-        try:
-            info['acquisition_rate_Hz'] = float(rate)
-        except ValueError:
-            pass
-    mfr = rk_serie.findtext('MaxFlowRate')
-    if mfr:
-        try:
-            info['max_flow_rate_uLmin'] = float(mfr)
-        except ValueError:
-            pass
+    starts = []
+    ends = []
+    temps = []
+    rates = []
+    mfrs = []
+    for i, rk_serie in enumerate(rk_series):
+        meta = rk_serie.find('Meta')
+        if meta is not None:
+            def _t(tag):
+                return (meta.findtext(tag) or '').strip()
+            if i == 0:
+                    fw = '.'.join(filter(None, [
+                        _t('FirmwareMajorVersion'), _t('FirmwareMinorVersion'),
+                        _t('FirmwareBuild'), _t('FirmwareRevision')]))
+                    info.update({
+                        'serial_number': _t('SerialNumber'),
+                        'hardware_version': _t('HardwareVersion'),
+                        'firmware_version': fw,
+                        'serie_recorded_version': _t('WAVEcontrolSerieRecordedVersion'),
+                    })
+            start = _t('MeasurementStartTime')
+            if start:
+                starts.append(start)
+            else:
+                starts.append(None)
+            end = _t('MeasurementEndTime')
+            if end:
+                ends.append(end)
+            else:
+                ends.append(None)
+        fc_temp = rk_serie.findtext('FCTemperature')
+        if fc_temp:
+            try:
+                fc_temp = float(fc_temp)
+                temps.append(fc_temp)
+            except ValueError:
+                temps.append(None)
+        else:
+            temps.append(None)
+        rate = rk_serie.findtext('AcquisitionRate')
+        if rate:
+            try:
+                rate = float(rate)
+                rates.append(rate)
+            except ValueError:
+                rates.append(None)
+        else:
+            rates.append(None)
+        mfr = rk_serie.findtext('MaxFlowRate')
+        if mfr:
+            try:
+                mfr = float(mfr)
+                mfrs.append(mfr)
+            except ValueError:
+                mfrs.append(None)
+        else:
+            mfrs.append(None)
+
+    info.update({
+        'measurement_starts': starts,
+        'measurement_ends': ends,
+        'fc_temperatures_C': temps,
+        'acquisition_rates_Hz': rates,
+        'max_flow_rates_uLmin': mfrs,
+    })
+    
     return info
 
 
-def _extract_buffers(rk_serie: ET.Element) -> list[dict]:
+def _extract_buffers(rk_series: list[ET.Element]) -> list[dict]:
     """List of buffer port definitions for the Pulse serie."""
     out = []
-    if rk_serie is None:
+    if not rk_series:
         return out
-    for b in rk_serie.findall('.//Buffers/Buffer'):
-        out.append({
-            'id': (b.findtext('Id') or '').strip(),
-            'inlet': (b.findtext('Inlet') or '').strip(),
-            'name': (b.findtext('Name') or '').strip(),
-        })
-    return out
-
-
-def _extract_autosampler(rk_serie: ET.Element) -> dict:
-    """Autosampler racks + reagent table (with category & volume)."""
-    out = {'racks': [], 'reagents': []}
-    if rk_serie is None:
-        return out
-    asv = rk_serie.find('AutosamplerVM')
-    if asv is None:
-        return out
-    for rack_tag in ('LeftRack', 'RightRack'):
-        rack = asv.find(rack_tag)
-        if rack is None:
-            continue
-        rc = rack.find('.//RackConfig')
-        rack_info = {
-            'side': rack_tag.replace('Rack', ''),
-            'use_single_well': rack.get('UseSingleWell', ''),
-            'columns': rc.get('Columns', '') if rc is not None else '',
-            'rows': rc.get('Rows', '') if rc is not None else '',
-            'rack_volume_uL': rc.get('Volume', '') if rc is not None else '',
-            'well_volume_uL': (rack.findtext('WellVolume') or '').strip(),
-        }
-        out['racks'].append(rack_info)
-        for r in rack.findall('.//Reagent'):
-            try:
-                vol = float(r.get('Volume', '0') or '0')
-            except ValueError:
-                vol = 0.0
-            conc_raw = r.get('Concentration', '')
-            try:
-                conc_M = _parse_concentration(conc_raw or '0')
-            except ValueError:
-                conc_M = None  # e.g. '0.5 %' DMSO
-            out['reagents'].append({
-                'side': rack_tag.replace('Rack', ''),
-                'slot': r.get('Slot', ''),
-                'designation': r.get('Designation', ''),
-                'category': r.get('Category', ''),
-                'concentration_M': conc_M,
-                'concentration_raw': conc_raw,
-                'mw_Da': _parse_mw(r.get('MW', '0')),
-                'volume_uL': vol,
+    for i, rk_serie in enumerate(rk_series):
+        info = []
+        for b in rk_serie.findall('.//Buffers/Buffer'):
+            info.append({
+                'rk_serie_id': i+1,
+                'id': (b.findtext('Id') or '').strip(),
+                'inlet': (b.findtext('Inlet') or '').strip(),
+                'name': (b.findtext('Name') or '').strip(),
             })
+        out.append(info)
     return out
 
 
-def _extract_immobilization(project_root: ET.Element) -> dict:
+def _extract_autosampler(rk_series: list[ET.Element]) -> list[dict]:
+    """Autosampler racks + reagent table (with category & volume)."""
+    out = []
+    if not rk_series:
+        return out
+    for i, rk_serie in enumerate(rk_series):
+        serie = {'rk_serie_id': i+1, 'racks': [], 'reagents': []}
+        if rk_serie is None:
+            out.append(serie)
+            continue
+        asv = rk_serie.find('AutosamplerVM')
+        if asv is None:
+            out.append(serie)
+            continue
+        for rack_tag in ('LeftRack', 'RightRack'):
+            rack = asv.find(rack_tag)
+            if rack is None:
+                continue
+            rc = rack.find('.//RackConfig')
+            rack_info = {
+                'side': rack_tag.replace('Rack', ''),
+                'use_single_well': rack.get('UseSingleWell', ''),
+                'columns': rc.get('Columns', '') if rc is not None else '',
+                'rows': rc.get('Rows', '') if rc is not None else '',
+                'rack_volume_uL': rc.get('Volume', '') if rc is not None else '',
+                'well_volume_uL': (rack.findtext('WellVolume') or '').strip(),
+            }
+            serie['racks'].append(rack_info)
+            for r in rack.findall('.//Reagent'):
+                try:
+                    vol = float(r.get('Volume', '0') or '0')
+                except ValueError:
+                    vol = 0.0
+                conc_raw = r.get('Concentration', '')
+                try:
+                    conc_M = _parse_concentration(conc_raw or '0')
+                except ValueError:
+                    conc_M = None  # e.g. '0.5 %' DMSO
+                serie['reagents'].append({
+                    'side': rack_tag.replace('Rack', ''),
+                    'slot': r.get('Slot', ''),
+                    'designation': r.get('Designation', ''),
+                    'category': r.get('Category', ''),
+                    'concentration_M': conc_M,
+                    'concentration_raw': conc_raw,
+                    'mw_Da': _parse_mw(r.get('MW', '0')),
+                    'volume_uL': vol,
+                })
+        out.append(serie)
+    return out
+
+
+def _extract_immobilization(project_root: ET.Element,
+                            rk_series: list[ET.Element]) -> list[dict]:
     """Summary of the Immobilization serie (chip prep)."""
-    serie = next((s for s in project_root.findall('.//Serie')
-                  if s.findtext('Type') == 'Immobilization'), None)
-    if serie is None:
+    if not rk_series:
         return {}
-    meta = serie.find('Meta')
-    info = {
-        'name': (serie.findtext('Name') or '').strip(),
-        'guid': (serie.findtext('Guid') or '').strip(),
-        'measurement_start': (
-            meta.findtext('MeasurementStartTime') or '').strip()
-            if meta is not None else '',
-        'measurement_end': (
-            meta.findtext('MeasurementEndTime') or '').strip()
-            if meta is not None else '',
-        'capture_fcs': sorted(_capture_fcs(project_root)),
-        'cycle_count': len(serie.findall('.//Cycle')),
-    }
+    info = []
+    for i, rk_serie in enumerate(rk_series):
+        meta = rk_serie.find('Meta')
+        if meta is None:
+            info.append(None)
+            continue
+        info.append({
+            'rk_serie_id': i+1,
+            'name': (rk_serie.findtext('Name') or '').strip(),
+            'guid': (rk_serie.findtext('Guid') or '').strip(),
+            'measurement_start': (
+                meta.findtext('MeasurementStartTime') or '').strip()
+                if meta is not None else '',
+            'measurement_end': (
+                meta.findtext('MeasurementEndTime') or '').strip()
+                if meta is not None else '',
+            'capture_fcs': sorted(_capture_fcs(project_root)),
+            'cycle_count': len(rk_serie.findall('.//Cycle')),
+        })
     return info
 
 
-def _extract_report_points(rk_serie: ET.Element) -> list[dict]:
+def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
     """Report-point definitions from the Pulse serie."""
     out = []
-    if rk_serie is None:
+    if not rk_series:
         return out
-    for rp in rk_serie.findall('.//ReportPointConfiguration'):
-        def _t(tag):
-            return (rp.findtext(tag) or '').strip()
-        try:
-            shift = float(_t('Shift'))
-        except ValueError:
-            shift = None
-        try:
-            avg = float(_t('Averaging'))
-        except ValueError:
-            avg = None
-        out.append({
-            'name': _t('Name'),
-            'marker': _t('MarkerType'),
-            'shift_s': shift,
-            'averaging': avg,
-            'is_reference': _t('IsReference') == 'true',
-            'active': _t('Active') == 'true',
-        })
+    for i, rk_serie in enumerate(rk_series):
+        info = []
+        for rp in rk_serie.findall('.//ReportPointConfiguration'):
+            def _t(tag):
+                return (rp.findtext(tag) or '').strip()
+            try:
+                shift = float(_t('Shift'))
+            except ValueError:
+                shift = None
+            try:
+                avg = float(_t('Averaging'))
+            except ValueError:
+                avg = None
+            info.append({
+                'rk_serie_id': i+1,
+                'name': _t('Name'),
+                'marker': _t('MarkerType'),
+                'shift_s': shift,
+                'averaging': avg,
+                'is_reference': _t('IsReference') == 'true',
+                'active': _t('Active') == 'true',
+            })
+        out.append(info)
     return out
 
 
@@ -757,32 +817,33 @@ def load_cxw(filepath: str, channels='all') -> dict:
                     f'No matching channels. Requested {channels}, '
                     f'available active FCs: {avail}')
 
-        # Find RAPID Kinetics serie
-        rk_serie = None
-        rk_guid = None
+        # Find RAPID Kinetics series
+        rk_series = []
+        rk_guids = []
         for serie in project.findall('.//Serie'):
             if serie.findtext('Type') == 'Pulse':
-                rk_serie = serie
+                rk_series.append(serie)
                 rk_guid = serie.findtext('Guid', '')
-                break
+                rk_guids.append(rk_guid)
 
         # Reagent lookup from wizard
-        reagent_lookup = _build_reagent_lookup(zf, rk_guid)
+        reagent_lookups = _build_reagent_lookup(zf, rk_guids)
 
         # Extended project / instrument / buffers / autosampler / report points
         project_meta = _extract_project_meta(zf)
-        instrument = _extract_instrument(project, rk_serie)
-        buffers = _extract_buffers(rk_serie)
-        autosampler = _extract_autosampler(rk_serie)
-        immobilization = _extract_immobilization(project)
-        report_points = _extract_report_points(rk_serie)
+        instrument = _extract_instrument(project, rk_series if rk_series else None)
+        buffers = _extract_buffers(rk_series if rk_series else None)
+        autosamplers = _extract_autosampler(rk_series if rk_series else None)
+        immobilizations = _extract_immobilization(project, rk_series if rk_series else None)
+        report_points = _extract_report_points(rk_series if rk_series else None)
 
         # (side, slot) → {category, volume_uL, ...}  for cycle merging
-        as_lookup = {(r['side'], r['slot']): r
-                     for r in autosampler.get('reagents', [])}
+        as_lookups = [{(r['side'], r['slot']): r
+                      for r in a.get('reagents', [])}
+                     for a in autosamplers]
 
         # Cycle metadata (with autosampler enrichment)
-        all_cycles = _extract_cycles(rk_serie, reagent_lookup, as_lookup)
+        all_cycles = _extract_cycles(rk_series, reagent_lookups, as_lookups)
 
         # Kinetic fit results (Evaluations/*.cx3) — empty list if absent
         evaluations = _extract_evaluations(zf)
@@ -841,8 +902,8 @@ def load_cxw(filepath: str, channels='all') -> dict:
         'project': project_meta,
         'instrument': instrument,
         'buffers': buffers,
-        'autosampler': autosampler,
-        'immobilization': immobilization,
+        'autosampler': autosamplers,
+        'immobilization': immobilizations,
         'report_points': report_points,
         'samples': samples,
         'dmso_cals': dmso_cals,

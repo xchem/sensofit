@@ -6,10 +6,11 @@ showing compound name, ka, kd, and KD values.
 
 import os
 import numpy as np
+from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 
 
-def plot_fit(result, sample, ax=None, title=None):
+def plot_fit(result, sample, mode='ode', ax=None, title=None):
     """Plot data vs model fit for a single sample.
 
     Parameters
@@ -43,11 +44,11 @@ def plot_fit(result, sample, ax=None, title=None):
     if R_fit is not None:
         # ODE mode: R_fit has NaN outside fit window
         mask = np.isfinite(R_fit)
-        ax.plot(t[mask], R_fit[mask], color='red', linewidth=1.2,
-                label='ODE fit')
-    elif 'R_smooth' in result:
+        ax.plot(t[mask], R_fit[mask], color='red' if mode == 'ode' else 'blue', linewidth=1.2,
+                linestyle='--', label='ODE fit')
+    if 'R_smooth' in result:
         # DK mode: plot smoothed signal
-        ax.plot(t, result['R_smooth'], color='blue', linewidth=1.0,
+        ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
                 linestyle='--', label='DK smooth')
 
     # Labels
@@ -95,15 +96,17 @@ def plot_fit(result, sample, ax=None, title=None):
     return fig
 
 
-def save_fit_plots(results, samples, output_dir, mode='ode'):
+def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs=None):
     """Save individual fit plots as PNGs.
 
     Parameters
     ----------
-    results : list[dict]
-        Fit result dicts, one per sample (same order as *samples*).
+    df : pandas.DataFrame
+        DataFrame containing fit results.
     samples : list[dict]
         Sample cycle dicts from ``load_cxw()``.
+    results : list[dict or None]
+        List of fit result dicts (one per sample), or None for failed fits.
     output_dir : str
         Directory to write PNG files into (created if needed).
     mode : str
@@ -115,34 +118,54 @@ def save_fit_plots(results, samples, output_dir, mode='ode'):
         File paths of the saved PNGs.
     """
     os.makedirs(output_dir, exist_ok=True)
-    paths = []
-
-    for i, (result, sample) in enumerate(zip(results, samples)):
-        if result is None:
-            paths.append(None)
-            continue
-
-        compound = sample.get('compound', 'Unknown')
-        channel = sample.get('channel', '')
-        # Sanitise compound name for filename
-        safe_name = _sanitise_filename(compound)
-        safe_ch = _sanitise_filename(channel) if channel else ''
-        idx = sample.get('index', i)
-        parts = [f'{idx:03d}', safe_name]
-        if safe_ch:
-            parts.append(safe_ch)
-        fname = '_'.join(parts) + '.png'
-        fpath = os.path.join(output_dir, fname)
-
-        fig = plot_fit(result, sample)
-        if fig is not None:
-            fig.savefig(fpath, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            paths.append(fpath)
-        else:
-            paths.append(None)
+    
+    if n_parallel_jobs:
+        paths = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
+            delayed(_save_fit_process)(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()
+        )
+    else:
+        paths = [_save_fit_process(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()]        
 
     return paths
+
+
+def _save_fit_process(i, row, samples, mode, output_dir, results):
+    """Helper for multiprocessing save_fit_plots."""
+    idx = row.get('cycle_index')
+    ch = row.get('channel', '')
+    rk_serie = row.get('rk_serie_id', '')
+    match_sample = [s for s in samples if s['index'] == idx and s.get('channel', '') == ch and s.get('rk_serie_id', '') == rk_serie]
+    if len(match_sample) > 1:
+        print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
+    elif len(match_sample) == 0:
+        print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
+        return None
+    sample = match_sample[0]
+    compound = sample.get('compound', 'Unknown')
+    channel = sample.get('channel', ch)
+    idx = sample.get('index', idx)
+    rk_serie = sample.get('rk_serie_id', rk_serie)
+    # Sanitise compound name for filename
+    safe_name = _sanitise_filename(compound)
+    safe_ch = _sanitise_filename(channel) if channel else ''
+    parts = [f'RK{rk_serie:02d}', f'{idx:03d}', safe_name]
+    if safe_ch:
+        parts.append(safe_ch)
+    fname = '_'.join(parts) + '_' + mode.upper() + '.png'
+    fpath = os.path.join(output_dir, fname)
+
+    result = results[i]
+    if result is None:
+        print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
+        return None
+    fig = plot_fit(result, sample, mode=mode)
+    if fig is not None:
+        fig.savefig(fpath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return fpath
+    else:
+        return None
+    
 
 
 def _sanitise_filename(name):

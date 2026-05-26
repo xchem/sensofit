@@ -270,7 +270,7 @@ def _kinetics_csv_rows(cxw_path: str, data: dict, grouped: dict,
     Analyte string disagrees with the rack still resolve correctly.
     """
     instr = data.get('instrument') or {}
-    run_date = (instr.get('measurement_start') or '').split('T')[0]
+    run_date = (instr.get('measurement_starts') or [''])[0].split('T')[0]
     rows = []
     for key in sorted(grouped.keys()):
         bundle = grouped[key]
@@ -572,11 +572,12 @@ def _render_readme(summaries: list, package_name: str) -> str:
                 ('Firmware', 'firmware_version', ''),
                 ('WAVEcontrol (saved)', 'wave_control_version', ''),
                 ('WAVEcontrol (recorded)', 'serie_recorded_version', ''),
-                ('Flow-cell temperature', 'fc_temperature_C', ' °C'),
-                ('Acquisition rate', 'acquisition_rate_Hz', ' Hz'),
-                ('Max flow rate', 'max_flow_rate_uLmin', ' µL/min'),
-                ('Measurement start', 'measurement_start', ''),
-                ('Measurement end', 'measurement_end', ''),
+                ('Number of Series in the CXW', 'n_series', ''),
+                ('Flow-cell temperatures', 'fc_temperatures_C', ' °C'),
+                ('Acquisition rates', 'acquisition_rates_Hz', ' Hz'),
+                ('Max flow rates', 'max_flow_rates_uLmin', ' µL/min'),
+                ('Measurement starts', 'measurement_starts', ''),
+                ('Measurement ends', 'measurement_ends', ''),
             ]:
                 v = instr.get(key)
                 if v not in (None, ''):
@@ -587,15 +588,17 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('')
             lines.append('**Chip preparation (immobilization)**')
             lines.append('')
-            if immob.get('name'):
-                lines.append(f'- Serie name: {immob["name"]}')
-            if immob.get('capture_fcs'):
-                fcs = ', '.join(f'FC{n}' for n in immob['capture_fcs'])
-                lines.append(f'- Capture flow cell(s): {fcs}')
-            if immob.get('measurement_start'):
-                lines.append(f'- Started: {immob["measurement_start"]}')
-            if immob.get('measurement_end'):
-                lines.append(f'- Ended: {immob["measurement_end"]}')
+            for imm in immob:
+                if imm.get('name'):
+                    lines.append(f'- Serie ID: {imm["rk_serie_id"]}')
+                    lines.append(f'- Serie name: {imm["name"]}')
+                if imm.get('capture_fcs'):
+                    fcs = ', '.join(f'FC{n}' for n in imm['capture_fcs'])
+                    lines.append(f'- Capture flow cell(s): {fcs}')
+                if imm.get('measurement_start'):
+                    lines.append(f'- Started: {imm["measurement_start"]}')
+                if imm.get('measurement_end'):
+                    lines.append(f'- Ended: {imm["measurement_end"]}')
 
         buffers = s.get('buffers') or []
         if buffers:
@@ -605,8 +608,8 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('| Id | Inlet | Name |')
             lines.append('|---|---|---|')
             for b in buffers:
-                lines.append(f'| {b.get("id","")} | {b.get("inlet","")} | '
-                             f'{b.get("name","") or "—"} |')
+                lines.append(f'| {b.get("rk_serie_id","")} | {b.get("id","")} | '
+                             f'{b.get("inlet","")} | {b.get("name","") or "—"} |')
 
         rps = s.get('report_points') or []
         if rps:
