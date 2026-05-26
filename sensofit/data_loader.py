@@ -488,13 +488,15 @@ def _extract_buffers(rk_series: list[ET.Element]) -> list[dict]:
     if not rk_series:
         return out
     for i, rk_serie in enumerate(rk_series):
+        info = []
         for b in rk_serie.findall('.//Buffers/Buffer'):
-            out.append({
+            info.append({
                 'rk_serie_id': i+1,
                 'id': (b.findtext('Id') or '').strip(),
                 'inlet': (b.findtext('Inlet') or '').strip(),
                 'name': (b.findtext('Name') or '').strip(),
             })
+        out.append(info)
     return out
 
 
@@ -583,6 +585,7 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
     if not rk_series:
         return out
     for i, rk_serie in enumerate(rk_series):
+        info = []
         for rp in rk_serie.findall('.//ReportPointConfiguration'):
             def _t(tag):
                 return (rp.findtext(tag) or '').strip()
@@ -594,7 +597,7 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
                 avg = float(_t('Averaging'))
             except ValueError:
                 avg = None
-            out.append({
+            info.append({
                 'rk_serie_id': i+1,
                 'name': _t('Name'),
                 'marker': _t('MarkerType'),
@@ -603,6 +606,7 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
                 'is_reference': _t('IsReference') == 'true',
                 'active': _t('Active') == 'true',
             })
+        out.append(info)
     return out
 
 
