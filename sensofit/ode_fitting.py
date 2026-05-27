@@ -44,6 +44,21 @@ def _residuals_full(params, t, signal, c_func, w):
     R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0)
     return w * (signal - R_sim)
 
+def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params=None, t=None, c_func=None, sqrt=False):
+    """Calculate Chi2 from ODE residuals.
+    
+    Chi2 = sum((w * residuals)^2) / (N - n_params)
+    Returns Chi2 or Sqrt(Chi2) if sqrt=True."""
+    if not residuals:
+        if R_sim:
+            residuals = w * (signal - R_sim)
+        else:
+            residuals = _residuals_full(params, t, signal, c_func, w)
+
+    n_points = int((w > 0).sum()) if w is not None else len(residuals)    
+    chi2 = np.sum(residuals**2)/(n_points - max(n_params, 1))
+    return np.sqrt(chi2) if sqrt else chi2
+
 
 def _solve_R0_Rss(kd, t_dissoc, signal_dissoc, t0):
     """Closed-form linear regression for R0 and Rss given fixed kd.
@@ -151,9 +166,11 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     if not fits:
         # Fallback: use derived estimates
         R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func, R0=0.0)
+        sqrt_chi2 = _chi2(R_sim=R_fit, n_params=len([ka_est, kd_final, Rmax_est]), w=w, sqrt=True)
         return {
             'ka': ka_est, 'kd': kd_final, 'Rmax': Rmax_est,
             'KD': kd_final / ka_est,
+            'Sqrt(Chi2)': sqrt_chi2,
             'R0': R0_est, 'Rss': Rss_est,
             'ka_se': np.nan, 'kd_se': np.nan, 'Rmax_se': np.nan,
             'cov': np.full((3, 3), np.nan),
@@ -186,9 +203,10 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     # Confidence from best Jacobian (lowest cost)
     best_idx = np.argmin([f[1] for f in fits])
     best_jac = fits[best_idx][2]
-
+    
+    params = [ka_final_val, kd_final_val, Rmax_final]
     residuals = _residuals_full(
-        [ka_final_val, kd_final_val, Rmax_final], t, signal, c_func, w)
+        params, t, signal, c_func, w)
     n = int((w > 0).sum())
     dof = max(n - 3, 1)
     sigma2 = np.sum(residuals ** 2) / dof
@@ -206,11 +224,14 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     R_fit = simulate_sensorgram(t, ka_final_val, kd_final_val, Rmax_final,
                                 c_func, R0=0.0)
 
+    sqrt_chi2 = _chi2(residuals=residuals, n_params=len(params), w=w, sqrt=True)
+
     return {
         'ka': ka_final_val,
         'kd': kd_final_val,
         'Rmax': Rmax_final,
         'KD': KD,
+        'Sqrt(Chi2)': sqrt_chi2,
         'R0': R0_est,
         'Rss': Rss_est,
         'ka_se': ka_se,
