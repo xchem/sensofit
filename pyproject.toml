@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib",
     "jupyterlab",
     "seaborn",
+    "joblib",
 ]
 
 [tool.setuptools.packages.find]
