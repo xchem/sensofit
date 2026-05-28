@@ -2,9 +2,19 @@
 
 Usage
 -----
+# Run kinetic fitting on one or more .cxw files or SensoFit data packages:
     python -m sensofit /path/to/folder --mode ode --output results/
     python -m sensofit single_file.cxw --mode dk
     python -m sensofit data_package.zip --mode dk
+
+# Export raw .cxw data into a SensoFit data package for sharing:
+    python -m sensofit export /path/to/folder --output my_package.zip --name "My Dataset"
+    python -m sensofit export single_file.cxw --name "Single File Dataset"
+
+# Run protocol development analyses on one or more .cxw files or SensoFit data packages:
+    python -m sensofit protocol-dev /path/to/folder --mode capture --output protocol-dev/
+    python -m sensofit protocol-dev single_file.cxw --mode buffer-screen
+    python -m sensofit protocol-dev data_package.zip --mode stability
 """
 
 import argparse
@@ -135,11 +145,39 @@ def _run_export(argv):
     print(f'Wrote package: {out_path}')
 
 
+def _run_protocol_dev(argv):
+    parser = argparse.ArgumentParser(
+        prog='sensofit protocol-dev',
+        description='Automated analysis for protocol development experiments.',
+    )
+    parser.add_argument(
+        'paths', nargs='+',
+        help='Path to one or more .cxw files or directories.')
+    parser.add_argument(
+        '--mode', choices=['capture', 'buffer-screen', 'stability'], default='capture',
+        help='Type of protocol development analysis to run. Default: "capture".',
+    )
+    parser.add_argument(
+        '--output', '-o', default='protocol-dev',
+        help='Output directory for CSV and plots. Default: protocol-dev/',
+    )
+    args = parser.parse_args(argv)
+
+    print(f'Running protocol development on {args.paths}...')
+    # Placeholder for actual protocol development code.
+    # This could involve loading the data, running new fitting algorithms,
+    # comparing results, etc.
+    print('This is a placeholder for protocol development code.')
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == 'export':
         _run_export(argv[1:])
+        return
+    if argv and argv[0] == 'protocol-dev':
+        _run_protocol_dev(argv[1:])
         return
 
     parser = argparse.ArgumentParser(
