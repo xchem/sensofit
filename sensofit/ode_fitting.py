@@ -49,8 +49,8 @@ def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params
     
     Chi2 = sum((w * residuals)^2) / (N - n_params)
     Returns Chi2 or Sqrt(Chi2) if sqrt=True."""
-    if not residuals:
-        if R_sim:
+    if residuals is None:
+        if R_sim is not None:
             residuals = w * (signal - R_sim)
         else:
             residuals = _residuals_full(params, t, signal, c_func, w)
