@@ -154,14 +154,15 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb, m
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""
     row = {
-        'compound':        sample['compound'],
-        'concentration_M': sample['concentration_M'],
+        'compound_type':    sample['cycle_type'],
+        'compound':         sample['compound'],
+        'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':              sample.get('mw'),
-        'slot':            sample.get('slot'),
-        'cycle_index':     sample['index'],
-        'channel':         sample.get('channel', ''),
-        'rk_serie_id':    sample.get('rk_serie_id'),
+        'mw':               sample.get('mw'),
+        'slot':             sample.get('slot'),
+        'cycle_index':      sample['index'],
+        'channel':          sample.get('channel', ''),
+        'rk_serie_id':      sample.get('rk_serie_id'),
     }
 
     if mode == 'dk':
@@ -214,24 +215,25 @@ def _extract_row(sample, result, mode):
 def _fallback_row(sample, mode):
     """Return an all-NaN row when fitting raises an exception."""
     row = {
-        'compound':        sample['compound'],
-        'concentration_M': sample['concentration_M'],
+        'compound_type':    sample['cycle_type'],
+        'compound':         sample['compound'],
+        'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':              sample.get('mw'),
-        'slot':            sample.get('slot'),
-        'cycle_index':     sample['index'],
-        'channel':         sample.get('channel', ''),
-        'rk_serie_id':    sample.get('rk_serie_id'),
-        'ka':              np.nan,
-        'kd':              np.nan,
-        'Rmax':            np.nan,
-        'KD':              np.nan,
-        'KD_uM':           np.nan,
-        'Sqrt(Chi2)':      np.nan,
-        'sigma_res':       np.nan,
-        'n_points':        0,
-        'fit_mode':        mode,
-        'success':         False,
+        'mw':               sample.get('mw'),
+        'slot':             sample.get('slot'),
+        'cycle_index':      sample['index'],
+        'channel':          sample.get('channel', ''),
+        'rk_serie_id':      sample.get('rk_serie_id'),
+        'ka':               np.nan,
+        'kd':               np.nan,
+        'Rmax':             np.nan,
+        'KD':               np.nan,
+        'KD_uM':            np.nan,
+        'Sqrt(Chi2)':       np.nan,
+        'sigma_res':        np.nan,
+        'n_points':         0,
+        'fit_mode':         mode,
+        'success':          False,
     }
     return row
 
