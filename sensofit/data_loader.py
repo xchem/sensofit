@@ -3,7 +3,7 @@
 A .cxw file is a ZIP archive containing:
   - _project.cx3   : XML with cycle metadata, flow cell config, markers
   - cyclesData.h5   : HDF5 with raw channel data keyed by cycle GUID
-  - Wizard/*.cx3    : XML with reagent/sample definitions per serie
+  - Wizard/*.cx3    : XML with reagent/immobilization/sample definitions per serie
   - Evaluations/    : XML with per-compound kinetic fit results (not used here)
   - Correctors/     : XML with timing/offset corrections (not used here)
 """
@@ -552,9 +552,9 @@ def _extract_autosampler(rk_series: list[ET.Element]) -> list[dict]:
     return out
 
 
-def _extract_immobilization(project_root: ET.Element,
+def _extract_rk_series_info(project_root: ET.Element,
                             rk_series: list[ET.Element]) -> list[dict]:
-    """Summary of the Immobilization serie (chip prep)."""
+    """Summary of the RapidKinetics series information."""
     if not rk_series:
         return {}
     info = []
@@ -611,7 +611,7 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Wizard reagent lookup — extended with category and volume
+# Immobilization Serie and Immobilization Wizard lookup
 # ---------------------------------------------------------------------------
 
 
@@ -832,9 +832,9 @@ def load_cxw(filepath: str, channels='all') -> dict:
         # Extended project / instrument / buffers / autosampler / report points
         project_meta = _extract_project_meta(zf)
         instrument = _extract_instrument(project, rk_series if rk_series else None)
+        rk_series_info = _extract_rk_series_info(project, rk_series if rk_series else None)
         buffers = _extract_buffers(rk_series if rk_series else None)
         autosamplers = _extract_autosampler(rk_series if rk_series else None)
-        immobilizations = _extract_immobilization(project, rk_series if rk_series else None)
         report_points = _extract_report_points(rk_series if rk_series else None)
 
         # (side, slot) → {category, volume_uL, ...}  for cycle merging
@@ -901,9 +901,9 @@ def load_cxw(filepath: str, channels='all') -> dict:
         },
         'project': project_meta,
         'instrument': instrument,
+        'rk_series_info': rk_series_info,
         'buffers': buffers,
         'autosampler': autosamplers,
-        'immobilization': immobilizations,
         'report_points': report_points,
         'samples': samples,
         'dmso_cals': dmso_cals,

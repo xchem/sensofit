@@ -152,7 +152,7 @@ def _experiment_summary(cxw_path: str, data: dict, grouped: dict) -> dict:
         'instrument': data.get('instrument', {}),
         'buffers': data.get('buffers', []),
         'autosampler': data.get('autosampler', {}),
-        'immobilization': data.get('immobilization', {}),
+        'rk_series_info': data.get('rk_series_info', {}),
         'report_points': data.get('report_points', []),
     }
 
@@ -583,22 +583,22 @@ def _render_readme(summaries: list, package_name: str) -> str:
                 if v not in (None, ''):
                     lines.append(f'- {label}: {v}{suffix}')
 
-        immob = s.get('immobilization') or {}
-        if immob:
+        rk_series_info = s.get('rk_series_info', [])
+        if rk_series_info:
             lines.append('')
-            lines.append('**Chip preparation (immobilization)**')
+            lines.append('**RapidKinetics Series Information**')
             lines.append('')
-            for imm in immob:
-                if imm.get('name'):
-                    lines.append(f'- Serie ID: {imm["rk_serie_id"]}')
-                    lines.append(f'- Serie name: {imm["name"]}')
-                if imm.get('capture_fcs'):
-                    fcs = ', '.join(f'FC{n}' for n in imm['capture_fcs'])
+            for info in rk_series_info:
+                if info.get('name'):
+                    lines.append(f'- Serie ID: {info["rk_serie_id"]}')
+                    lines.append(f'- Serie name: {info["name"]}')
+                if info.get('capture_fcs'):
+                    fcs = ', '.join(f'FC{n}' for n in info['capture_fcs'])
                     lines.append(f'- Capture flow cell(s): {fcs}')
-                if imm.get('measurement_start'):
-                    lines.append(f'- Started: {imm["measurement_start"]}')
-                if imm.get('measurement_end'):
-                    lines.append(f'- Ended: {imm["measurement_end"]}')
+                if info.get('measurement_start'):
+                    lines.append(f'- Started: {info["measurement_start"]}')
+                if info.get('measurement_end'):
+                    lines.append(f'- Ended: {info["measurement_end"]}')
 
         buffers = s.get('buffers') or []
         if buffers:

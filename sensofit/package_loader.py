@@ -324,7 +324,7 @@ def load_package(path: str, name: str | None = None,
     -------
     dict
         Keys: ``config``, ``project``, ``instrument``, ``buffers``,
-        ``autosampler``, ``immobilization``, ``report_points``,
+        ``autosampler``, ``rk_series_info``, ``report_points``,
         ``samples``, ``dmso_cals``, ``blanks``, ``other_cycles``,
         ``all_cycles``, ``evaluations``.
     """
@@ -424,7 +424,7 @@ def load_package(path: str, name: str | None = None,
             'instrument': exp.get('instrument') or {},
             'buffers': exp.get('buffers') or [],
             'autosampler': exp.get('autosampler') or {},
-            'immobilization': exp.get('immobilization') or {},
+            'rk_series_info': exp.get('rk_series_info', []),
             'report_points': exp.get('report_points') or [],
             'samples': samples,
             'dmso_cals': dmso_cals,
