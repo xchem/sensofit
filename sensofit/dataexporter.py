@@ -7,6 +7,7 @@ The package layout is::
     ├── all_creoptix_kinetics_evaluations.csv
     └── {cxw_basename}/
         ├── experiment.json
+        ├── immobilizations.csv  # columns: serie_id, serie_name, construct, cycle_type, channel, time_s, capture_level
         ├── creoptix_kinetics_evaluations.csv
         └── {cpd}__{conc}__cyc{idx:03d}/
             ├── kinetics.json         
@@ -437,14 +438,14 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
                     # zip times and values (lengths may differ; zip stops at shortest)
                     for t, v in zip(tlist, vlist):
                         immo_csv_rows.append({
-                            'serie_id': serie.get('serie_id', ''),
-                            'serie_name': serie.get('name', ''),
-                            'guid': cyc.get('guid', ''),
-                            'construct': cyc.get('construct', ''),
-                            'channel': ch,
-                            'time_s': t,
-                            'capture_level': v,
-                        })
+                                'serie_id': serie.get('serie_id', ''),
+                                'serie_name': serie.get('name', ''),
+                                'construct': cyc.get('construct', ''),
+                                'cycle_type': cyc.get('cycle_type', ''),
+                                'channel': ch,
+                                'time_s': t,
+                                'capture_level': v,
+                            })
         immos_json.append(sj)
 
     # Replace heavy arrays in summary with JSON-safe variant
@@ -457,7 +458,7 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
     if immo_csv_rows:
         immo_csv_path = os.path.join(cxw_root, 'immobilizations.csv')
         with open(immo_csv_path, 'w', newline='') as fh:
-            cols = ['serie_id', 'serie_name', 'guid', 'construct', 'channel', 'time_s', 'capture_level']
+            cols = ['serie_id', 'serie_name', 'construct', 'cycle_type', 'channel', 'time_s', 'capture_level']
             w = csv.DictWriter(fh, fieldnames=cols)
             w.writeheader()
             for r in immo_csv_rows:
@@ -520,6 +521,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
     for s in summaries:
         lines.append(f'└── {s["cxw_folder"]}/')
         lines.append('    ├── experiment.json')
+        lines.append('    ├── immobilizations.csv')
         lines.append('    ├── creoptix_kinetics_evaluations.csv')
         for cyc in s['cycles'][:3]:
             lines.append(f'    ├── {cyc["folder"]}/')

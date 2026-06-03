@@ -438,6 +438,8 @@ def load_package(path: str, name: str | None = None,
             for row in reader:
                 sid = row.get('serie_id', '')
                 guid = row.get('guid', '')
+                construct = row.get('construct', '')
+                cycle_type = row.get('cycle_type', '')
                 ch = row.get('channel', '')
                 try:
                     t = float(row.get('time_s', ''))
@@ -447,14 +449,18 @@ def load_package(path: str, name: str | None = None,
                     v = float(row.get('capture_level', ''))
                 except Exception:
                     v = float('nan')
-                key = (sid, guid)
-                entry = temp.setdefault(key, {})
+                # Primary grouping key: (serie_id, construct, cycle_type)
+                keym = (sid, construct, cycle_type)
+                entry = temp.setdefault(keym, {})
                 entry.setdefault('serie_name', row.get('serie_name', ''))
-                entry.setdefault('construct', row.get('construct', ''))
+                entry.setdefault('construct', construct)
                 chmap = entry.setdefault('channels', {})
                 chentry = chmap.setdefault(ch, {'time': [], 'value': []})
                 chentry['time'].append(t)
                 chentry['value'].append(v)
+                # Also map by guid if present so older CSVs are supported
+                if guid:
+                    temp.setdefault((sid, guid), entry)
 
             # Build series according to metadata order so names / cycles match
             for serie_meta in immo_meta:
@@ -463,10 +469,32 @@ def load_package(path: str, name: str | None = None,
                 cycles_out = []
                 for cyc_meta in serie_meta.get('cycles', []):
                     guid = cyc_meta.get('guid', '')
-                    key = (sid, guid)
+                    construct = cyc_meta.get('construct', '')
+                    cycle_type = cyc_meta.get('cycle_type', '')
+                    # Prefer matching by (serie_id, construct, cycle_type)
+                    key_meta = (sid, construct, cycle_type)
+                    key_guid = (sid, guid)
                     cap = {'time': None, 'FC1': None, 'FC2': None, 'FC3': None, 'FC4': None}
-                    if key in temp:
-                        entry = temp[key]
+                    entry = None
+                    if key_meta in temp:
+                        entry = temp[key_meta]
+                    elif key_guid in temp:
+                        entry = temp[key_guid]
+                    if entry is not None:
+                        # choose first available channel's time array as canonical
+                        time_arr = None
+                        for ch in ('FC1', 'FC2', 'FC3', 'FC4'):
+                            if ch in entry['channels'] and entry['channels'][ch]['time']:
+                                times = entry['channels'][ch]['time']
+                                vals = entry['channels'][ch]['value']
+                                order = sorted(range(len(times)), key=lambda i: times[i])
+                                times_sorted = [times[i] for i in order]
+                                vals_sorted = [vals[i] for i in order]
+                                time_arr = np.asarray(times_sorted, dtype=np.float64)
+                                cap[ch] = np.asarray(vals_sorted, dtype=np.float64)
+                            else:
+                                cap[ch] = None
+                        cap['time'] = time_arr
                         # choose first available channel's time array as canonical
                         time_arr = None
                         for ch in ('FC1', 'FC2', 'FC3', 'FC4'):
