@@ -239,7 +239,7 @@ def _evaluations_from_csv(src: _PackageSource, exp_dir: str) -> list:
     Returns an empty list when the package carries no fits for this
     experiment.
     """
-    rel = f'{exp_dir}/kinetics.csv'
+    rel = f'{exp_dir}/creoptix_kinetics_evaluations.csv'
     if not src.exists(rel):
         return []
     text = src.read_text(rel)
@@ -257,6 +257,10 @@ def _evaluations_from_csv(src: _PackageSource, exp_dir: str) -> list:
             cycle_index = int(row['cycle_number']) if row.get('cycle_number') else None
         except ValueError:
             cycle_index = None
+        try:
+            rk_serie_id = int(row['rk_serie_id']) if row.get('rk_serie_id') else None
+        except ValueError:
+            rk_serie_id = None
         ch = row.get('channel_label') or ''
         ka = _f(row.get('ka_M-1_s-1'))
         kd = _f(row.get('kd_s-1'))
@@ -272,6 +276,7 @@ def _evaluations_from_csv(src: _PackageSource, exp_dir: str) -> list:
             except ValueError:
                 pass
         out.append({
+            'rk_serie_id': rk_serie_id,
             'cycle_index': cycle_index,
             'cycle_guid': '',  # not preserved in package CSV
             'compound': row.get('compound', '') or '',
@@ -324,9 +329,9 @@ def load_package(path: str, name: str | None = None,
     -------
     dict
         Keys: ``config``, ``project``, ``instrument``, ``buffers``,
-        ``autosampler``, ``rk_series_info``, ``report_points``,
-        ``samples``, ``dmso_cals``, ``blanks``, ``other_cycles``,
-        ``all_cycles``, ``evaluations``.
+        ``immobilizations``,``autosampler``, ``rk_series_info``,
+        ``report_points``, ``samples``, ``dmso_cals``, ``blanks``,
+        ``other_cycles``, ``all_cycles``, ``evaluations``.
     """
     with _PackageSource(path) as src:
         exps = _experiment_dirs(src)
@@ -417,6 +422,80 @@ def load_package(path: str, name: str | None = None,
                     other_cycles.append(entry)
 
         evaluations = _evaluations_from_csv(src, exp_dir)
+        # Reconstruct immobilizations. The exporter writes a JSON-safe
+        # summary into experiment.json and a full `immobilizations.csv`
+        # with time / capture-level traces. When the CSV is present we
+        # rebuild numpy arrays to match the shape produced by
+        # `load_cxw`; otherwise fall back to the JSON summary.
+        immo_meta = exp.get('immobilizations') or []
+        immo_csv_rel = f'{exp_dir}/immobilizations.csv'
+        immobilizations = []
+        if src.exists(immo_csv_rel):
+            text = src.read_text(immo_csv_rel)
+            reader = csv.DictReader(io.StringIO(text))
+            # collect per (serie_id, guid, channel)
+            temp = {}
+            for row in reader:
+                sid = row.get('serie_id', '')
+                guid = row.get('guid', '')
+                ch = row.get('channel', '')
+                try:
+                    t = float(row.get('time_s', ''))
+                except Exception:
+                    t = float('nan')
+                try:
+                    v = float(row.get('capture_level', ''))
+                except Exception:
+                    v = float('nan')
+                key = (sid, guid)
+                entry = temp.setdefault(key, {})
+                entry.setdefault('serie_name', row.get('serie_name', ''))
+                entry.setdefault('construct', row.get('construct', ''))
+                chmap = entry.setdefault('channels', {})
+                chentry = chmap.setdefault(ch, {'time': [], 'value': []})
+                chentry['time'].append(t)
+                chentry['value'].append(v)
+
+            # Build series according to metadata order so names / cycles match
+            for serie_meta in immo_meta:
+                sid = str(serie_meta.get('serie_id', ''))
+                sname = serie_meta.get('name', '')
+                cycles_out = []
+                for cyc_meta in serie_meta.get('cycles', []):
+                    guid = cyc_meta.get('guid', '')
+                    key = (sid, guid)
+                    cap = {'time': None, 'FC1': None, 'FC2': None, 'FC3': None, 'FC4': None}
+                    if key in temp:
+                        entry = temp[key]
+                        # choose first available channel's time array as canonical
+                        time_arr = None
+                        for ch in ('FC1', 'FC2', 'FC3', 'FC4'):
+                            if ch in entry['channels'] and entry['channels'][ch]['time']:
+                                times = entry['channels'][ch]['time']
+                                vals = entry['channels'][ch]['value']
+                                order = sorted(range(len(times)), key=lambda i: times[i])
+                                times_sorted = [times[i] for i in order]
+                                vals_sorted = [vals[i] for i in order]
+                                time_arr = np.asarray(times_sorted, dtype=np.float64)
+                                cap[ch] = np.asarray(vals_sorted, dtype=np.float64)
+                            else:
+                                cap[ch] = None
+                        cap['time'] = time_arr
+                    cycles_out.append({
+                        'cycle_type': cyc_meta.get('cycle_type', ''),
+                        'construct': cyc_meta.get('construct', ''),
+                        'guid': guid,
+                        'capture_level': cap,
+                    })
+                immobilizations.append({
+                    'serie_id': serie_meta.get('serie_id', ''),
+                    'name': sname,
+                    'cycles': cycles_out,
+                    'immobilization_lookup': serie_meta.get('immobilization_lookup', {}),
+                })
+        else:
+            # No CSV: return the JSON summary as-is (no arrays)
+            immobilizations = immo_meta
 
         return {
             'config': config,
@@ -424,6 +503,7 @@ def load_package(path: str, name: str | None = None,
             'instrument': exp.get('instrument') or {},
             'buffers': exp.get('buffers') or [],
             'autosampler': exp.get('autosampler') or {},
+            'immobilizations': immobilizations,
             'rk_series_info': exp.get('rk_series_info', []),
             'report_points': exp.get('report_points') or [],
             'samples': samples,

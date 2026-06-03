@@ -152,7 +152,8 @@ def _experiment_summary(cxw_path: str, data: dict, grouped: dict) -> dict:
         'instrument': data.get('instrument', {}),
         'buffers': data.get('buffers', []),
         'autosampler': data.get('autosampler', {}),
-        'rk_series_info': data.get('rk_series_info', {}),
+        'immobilizations': data.get('immobilizations', []),
+        'rk_series_info': data.get('rk_series_info', []),
         'report_points': data.get('report_points', []),
     }
 
@@ -163,6 +164,7 @@ def _cycle_metadata(meta: dict, channels: list) -> dict:
         return None if v is None else float(v)
     return {
         'index': int(meta.get('index', -1)),
+        'rk_serie_id': int(meta.get('rk_serie_id')) if meta.get('rk_serie_id') is not None else None,
         'cycle_type': meta.get('cycle_type', ''),
         'guid': meta.get('guid', ''),
         'name': meta.get('name', ''),
@@ -270,7 +272,13 @@ def _kinetics_csv_rows(cxw_path: str, data: dict, grouped: dict,
     Analyte string disagrees with the rack still resolve correctly.
     """
     instr = data.get('instrument') or {}
-    run_date = (instr.get('measurement_starts') or [''])[0].split('T')[0]
+    starts = instr.get('measurement_starts') or ['']
+    for start in starts:
+        if start is not None:
+            run_date = start.split('T')[0]
+            break
+        else:
+            run_date = ''
     rows = []
     for key in sorted(grouped.keys()):
         bundle = grouped[key]
@@ -283,6 +291,7 @@ def _kinetics_csv_rows(cxw_path: str, data: dict, grouped: dict,
             rows.append({
                 'source_file': os.path.basename(cxw_path),
                 'run_date': run_date,
+                'rk_serie_id': meta.get('rk_serie_id'),
                 'cycle_number': idx,
                 'channel': e.get('channel_str') or ch,
                 'channel_label': ch,
@@ -303,7 +312,7 @@ def _kinetics_csv_rows(cxw_path: str, data: dict, grouped: dict,
 
 
 _KINETICS_CSV_COLUMNS = [
-    'source_file', 'run_date', 'cycle_number', 'channel', 'channel_label',
+    'source_file', 'run_date', 'rk_serie_id', 'cycle_number', 'channel', 'channel_label',
     'cycle_type', 'compound', 'concentration_M',
     'ka_M-1_s-1', 'ka_error', 'kd_s-1', 'kd_error', 'KD_M',
     'Rmax_pg_per_mm2', 'Rmax_error', 'sqrt_chi2_pg_per_mm2', 'comment',
@@ -389,8 +398,70 @@ def export_cxw(cxw_path: str, out_dir: str) -> dict:
 
     summary['cycles'] = cycle_rows
     summary['cxw_folder'] = basename
+    # Emit a JSON-safe immobilizations summary (strip arrays) and
+    # a full CSV carrying time / capture-level traces per channel.
+    immos_raw = data.get('immobilizations', [])
+    immos_json = []
+    immo_csv_rows = []
+    for serie in immos_raw:
+        sj = {
+            'serie_id': serie.get('serie_id', ''),
+            'name': serie.get('name', ''),
+            'cycles': [],
+            'immobilization_lookup': serie.get('immobilization_lookup', {}),
+        }
+        for cyc in serie.get('cycles', []):
+            sj['cycles'].append({
+                'cycle_type': cyc.get('cycle_type', ''),
+                'construct': cyc.get('construct', ''),
+                'guid': cyc.get('guid', ''),
+            })
+            cap = cyc.get('capture_level') or {}
+            time = cap.get('time') if cap is not None else None
+            # Write CSV rows per (serie, cycle, channel, time)
+            if time is not None:
+                # make plain python lists if numpy arrays
+                try:
+                    tlist = [float(x) for x in list(time)]
+                except Exception:
+                    tlist = []
+                for fc in (1, 2, 3, 4):
+                    ch = f'FC{fc}'
+                    arr = cap.get(ch)
+                    if arr is None:
+                        continue
+                    try:
+                        vlist = [float(x) for x in list(arr)]
+                    except Exception:
+                        vlist = []
+                    # zip times and values (lengths may differ; zip stops at shortest)
+                    for t, v in zip(tlist, vlist):
+                        immo_csv_rows.append({
+                            'serie_id': serie.get('serie_id', ''),
+                            'serie_name': serie.get('name', ''),
+                            'guid': cyc.get('guid', ''),
+                            'construct': cyc.get('construct', ''),
+                            'channel': ch,
+                            'time_s': t,
+                            'capture_level': v,
+                        })
+        immos_json.append(sj)
+
+    # Replace heavy arrays in summary with JSON-safe variant
+    summary['immobilizations'] = immos_json
+
     with open(os.path.join(cxw_root, 'experiment.json'), 'w') as fh:
         json.dump(summary, fh, indent=2, sort_keys=True)
+
+    # Write per-CXW immobilizations CSV if we collected any rows
+    if immo_csv_rows:
+        immo_csv_path = os.path.join(cxw_root, 'immobilizations.csv')
+        with open(immo_csv_path, 'w', newline='') as fh:
+            cols = ['serie_id', 'serie_name', 'guid', 'construct', 'channel', 'time_s', 'capture_level']
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            for r in immo_csv_rows:
+                w.writerow(r)
 
     # Per-CXW kinetics CSV (also used to build the package-wide bulk CSV).
     kin_rows = _kinetics_csv_rows(cxw_path, data, grouped, eval_lookup)
@@ -437,6 +508,7 @@ def _render_readme(summaries: list, package_name: str) -> str:
     lines.append(f'- **Generated:** {now}')
     lines.append(f'- **Source files:** {len(summaries)}')
     lines.append(f'- **Total cycles:** {n_cycles}')
+    lines.append(f'- **Total immobilization series:** {sum(len(s.get("immobilizations", [])) for s in summaries)}')
     lines.append('')
 
     lines.append('## Package layout')
@@ -600,6 +672,31 @@ def _render_readme(summaries: list, package_name: str) -> str:
                 if info.get('measurement_end'):
                     lines.append(f'- Ended: {info["measurement_end"]}')
 
+        immos = s.get('immobilizations') or []
+        if immos:
+            lines.append('')
+            lines.append('**Immobilization series**')
+            lines.append('')
+            for immo in immos:
+                lines.append(f'- Serie ID: {immo.get("serie_id", "")}')
+                if immo.get('name'):
+                    lines.append(f'  - Name: {immo["name"]}')
+                lines.append(f'  - Cycles: {len(immo.get("cycles", []))}')
+                lookup = immo.get('immobilization_lookup', {})
+                channels = lookup.get('channels', {})
+                if channels:
+                    lines.append('')
+                    lines.append('  | Channel | Construct | pH | Concentration | Capture level |')
+                    lines.append('  |---|---|---|---|---|')
+                    for channel, info in channels.items():
+                        if info:
+                            lines.append(
+                                f'  | {channel} | {info.get("name", "")} | '
+                                f'{info.get("pH", "")} | {info.get("concentration", "")} | '
+                                f'{info.get("capture_level", "")} |')
+                else:
+                    lines.append('  - No immobilization lookup details available.')
+
         buffers = s.get('buffers') or []
         if buffers:
             lines.append('')
@@ -607,9 +704,10 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('')
             lines.append('| Id | Inlet | Name |')
             lines.append('|---|---|---|')
-            for b in buffers:
-                lines.append(f'| {b.get("rk_serie_id","")} | {b.get("id","")} | '
-                             f'{b.get("inlet","")} | {b.get("name","") or "—"} |')
+            for buffer_serie in buffers:
+                for b in buffer_serie:
+                    lines.append(f'| {b.get("rk_serie_id","")} | {b.get("id","")} | '
+                                f'{b.get("inlet","")} | {b.get("name","") or "—"} |')
 
         rps = s.get('report_points') or []
         if rps:
@@ -618,12 +716,13 @@ def _render_readme(summaries: list, package_name: str) -> str:
             lines.append('')
             lines.append('| Name | Marker | Shift (s) | Averaging | Reference |')
             lines.append('|---|---|---|---|---|')
-            for rp in rps:
-                shift = rp.get('shift_s')
-                avg = rp.get('averaging')
-                lines.append(
-                    f'| {rp.get("name","")} | {rp.get("marker","")} | '
-                    f'{shift if shift is not None else ""} | '
+            for rps_serie in rps:
+                for rp in rps_serie:
+                    shift = rp.get('shift_s')
+                    avg = rp.get('averaging')
+                    lines.append(
+                        f'| {rp.get("name","")} | {rp.get("marker","")} | '
+                        f'{shift if shift is not None else ""} | '
                     f'{avg if avg is not None else ""} | '
                     f'{"yes" if rp.get("is_reference") else "no"} |')
 
