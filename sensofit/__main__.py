@@ -245,7 +245,7 @@ def main(argv=None):
     # Reorder columns: source_file, cycle_index, compound first
     priority = ['source_file', 'rk_serie_id', 'cycle_index', 'channel',
                 'compound_type', 'compound', 'concentration_M', 'concentration_uM',
-                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'sigma_res', 'flag',
+                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'sqrt_chi2', 'sigma_res', 'flag',
                 'flag_reason']
     ordered = [c for c in priority if c in combined.columns]
     remaining = [c for c in combined.columns if c not in ordered]
