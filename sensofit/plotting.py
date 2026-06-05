@@ -121,15 +121,14 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs
     
     if n_parallel_jobs:
         paths = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
-            delayed(_save_fit_process)(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()
-        )
+            delayed(_save_fit_process)(i, row, results, samples, mode, output_dir) for i, row in df.iterrows())
     else:
-        paths = [_save_fit_process(i, row, samples, mode, output_dir, results) for i, row in df.iterrows()]        
+        paths = [_save_fit_process(i, row, results, samples, mode, output_dir) for i, row in df.iterrows()]
 
     return paths
 
 
-def _save_fit_process(i, row, samples, mode, output_dir, results):
+def _save_fit_process(i, row, results, samples, mode, output_dir):
     """Helper for multiprocessing save_fit_plots."""
     idx = row.get('cycle_index')
     ch = row.get('channel', '')
@@ -141,6 +140,18 @@ def _save_fit_process(i, row, samples, mode, output_dir, results):
         print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
     sample = match_sample[0]
+    match_result = [r for r in results if r is not None
+                    and r.get('ka') == row.get('ka')
+                    and r.get('kd') == row.get('kd')
+                    and r.get('KD') == row.get('KD')
+                    and r.get('Rmax') == row.get('Rmax')
+                    and r.get('sigma_residual') == row.get('sigma_res')]
+    if len(match_result) > 1:
+        print(f'WARNING! Multiple results with same parameters for cycle {idx}, channel {ch}, RK serie {rk_serie}, using only the first match for plotting.')
+    elif len(match_result) == 0:
+        print(f'WARNING! No result found with same parameter values for cycle {idx}, channel {ch}, RK serie {rk_serie}, skipping plot.')
+        return None
+    result = match_result[0]
     compound = sample.get('compound', 'Unknown')
     channel = sample.get('channel', ch)
     idx = sample.get('index', idx)
@@ -154,7 +165,6 @@ def _save_fit_process(i, row, samples, mode, output_dir, results):
     fname = '_'.join(parts) + '_' + mode.upper() + '.png'
     fpath = os.path.join(output_dir, fname)
 
-    result = results[i]
     if result is None:
         print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
