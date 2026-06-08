@@ -98,7 +98,7 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
     Parameters
     ----------
     dmso_cycle : dict
-        DMSO cal dict with 'time', 'raw_reference', 'markers'.
+        DMSO cal dict with 'time', 'raw_active', 'markers'.
     C_analyte : float
         Nominal analyte concentration (M).
     pulse_window : float
@@ -112,7 +112,7 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
         Pulsed concentration array on the DMSO time grid.
     """
     t = dmso_cycle['time']
-    sig = dmso_cycle['raw_reference'].copy()
+    sig = dmso_cycle['raw_active'].copy()
 
     # Baseline-subtract
     inj_time = dmso_cycle['markers'].get('Injection', t[0])
@@ -140,34 +140,93 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
     return c_func, c_raw
 
 
-def select_dmso_cal(sample_index: int, dmso_cals: list[dict]) -> dict:
-    """Select the nearest DMSO Cal cycle for a given sample index.
+def select_dmso_cal(sample_index: int, dmso_cals: list[dict], verbose=False) -> dict:
+    """Select the nearest preceding DMSO Cal cycle for a given sample index.
 
-    Uses the DMSO Cal. cycle with the closest index (preferring the
-    preceding one in case of ties).
+    If no DMSO Cal precedes the sample, returns the closest overall.
     """
-    best = min(dmso_cals,
-               key=lambda d: (abs(d['index'] - sample_index),
-                              d['index'] > sample_index))
-    return best
+    valid = [d for d in dmso_cals if _is_dmso_cal_valid(d, verbose=verbose)]
+    preceding = [d for d in valid if d['index'] < sample_index]
+    if preceding:
+        return max(preceding, key=lambda d: d['index'])
+    return min(valid, key=lambda d: abs(d['index'] - sample_index))
+
+
+def _is_dmso_cal_valid(dmso_cycle: dict, verbose=False) -> bool:
+    """Check if a DMSO Cal cycle is valid for concentration profile construction.
+
+    Criteria:
+    - Baseline signal std >= 5.0 ==> BAD (indicates a noisy baseline before injection).
+    - max(Response) <= 50 ==> BAD (indicates a weak or failed pulse).
+    - min(raw signal in Active channel) <= -10 ==> BAD (indicates a problem with the raw signal, e.g. sensor error or incorrect channel).
+    - Otherwise ==> GOOD (valid for c(t) construction).
+    """
+    t = dmso_cycle['time']
+    markers = dmso_cycle['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    bl_mask = t < inj_time
+    response_mask = (t >= inj_time) & (t <= rinse_time)
+    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][np.isclose(t, bl_time)][0]
+    dmso_signal = dmso_cycle['raw_active'] - baseline
+    baseline_std = dmso_signal[bl_mask].std() if bl_mask.any() else 0.0
+    max_response = dmso_signal[response_mask].max() if response_mask.any() else dmso_signal.max()
+    min_signal = dmso_signal.min()
+    if verbose and not (baseline_std <= 5.0 and max_response >= 50.0 and min_signal >= -10.0):
+        print(f"WARNING! DMSO Cal cycle {dmso_cycle['index']} ({dmso_cycle['channel']}) failed validity check "
+              f"(std={baseline_std:.2f}, max_response={max_response:.2f}, "
+              f"min_signal={min_signal:.2f}). This cycle will be excluded from "
+              "concentration profile construction.")
+    return baseline_std < 5.0 and max_response > 50.0 and min_signal > -10.0
 
 
 # ---------------------------------------------------------------------------
 # Blank selection and double referencing
 # ---------------------------------------------------------------------------
 
-def select_blank(sample_index: int, blanks: list[dict]) -> dict:
+def select_blank(sample_index: int, blanks: list[dict], verbose=False) -> dict:
     """Select the nearest preceding blank cycle for double referencing.
 
     If no blank precedes the sample, returns the closest overall.
     """
-    preceding = [b for b in blanks if b['index'] < sample_index]
+    valid = [b for b in blanks if _is_blank_valid(b, verbose=verbose)]
+    preceding = [b for b in valid if b['index'] < sample_index]
     if preceding:
         return max(preceding, key=lambda b: b['index'])
-    return min(blanks, key=lambda b: abs(b['index'] - sample_index))
+    return min(valid, key=lambda b: abs(b['index'] - sample_index))
 
 
-def double_reference(sample: dict, blanks: list[dict]):
+def _is_blank_valid(blank: dict, verbose=False) -> bool:
+    """Check if a blank cycle is valid for double referencing.
+    Criteria:
+    - Baseline signal std > 2.5 ==> BAD (indicates a noisy baseline before injection).
+    - -5 >= Steady-state baseline-subtracted signal (currently mean of last 10 points) >= 5 ==> BAD (indicates a strong binding response in the blank).
+    - max(Baseline-subtracted signal) > 50 ==> BAD (indicates a strong binding response in the blank).
+    - Response between injection and rinse <= -5 ==> BAD (indicates a problem during injection)
+    - Otherwise ==> GOOD (valid for double referencing).
+    """
+    t = blank['time']
+    markers = blank['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    bl_mask = t < inj_time
+    response_mask = (t >= inj_time) & (t <= rinse_time)
+    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][np.isclose(t, bl_time)][0]
+    blank_signal = blank['signal'] - baseline
+    baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
+    steady_state = blank_signal[-10:].mean()
+    max_signal = blank_signal.max()
+    min_response = blank_signal[response_mask].min() if response_mask.any() else blank_signal.min()
+    if verbose and not (baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0):
+        print(f"WARNING! Blank cycle {blank['index']} ({blank['channel']}) failed validity check "
+              f"(std={baseline_std:.2f}, steady_state={steady_state:.2f}, "
+              f"max_signal={max_signal:.2f}, min_response={min_response:.2f}). "
+              "This blank will be excluded from double referencing.")
+    return baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0
+
+def double_reference(sample: dict, blank: dict):
     """Apply double referencing: subtract nearest preceding blank.
 
     If the subtraction yields a negative peak response near the Rinse
@@ -178,8 +237,8 @@ def double_reference(sample: dict, blanks: list[dict]):
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    blanks : list[dict]
-        Blank cycles from load_cxw().
+    blank : dict
+        Blank cycle from load_cxw().
 
     Returns
     -------
@@ -189,26 +248,22 @@ def double_reference(sample: dict, blanks: list[dict]):
         Index of the blank used, or None if fallback (no blank subtraction).
     """
     t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
     rinse_time = sample['markers'].get('Rinse', t[-1])
     n = len(t)
 
     # Baseline-subtract sample
     bl_mask = t < inj_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else 0.0
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
     s_bl = sample['signal'] - s_baseline
 
-    # Sort blanks: preceding first (nearest first), then following
-    candidates = sorted(
-        blanks,
-        key=lambda b: (b['index'] > sample['index'],
-                       abs(b['index'] - sample['index'])))
-
-    for blank in candidates:
+    if blank:
+        # Baseline-subtract blank
         n_b = len(blank['signal'])
         n_min = min(n, n_b)
         bl_mask_b = t[:n_min] < inj_time
-        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else 0.0
+        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min][np.isclose(t, bl_time)][0]
         b_bl = blank['signal'][:n_min] - b_baseline
         corrected_short = s_bl[:n_min] - b_bl
 
@@ -220,12 +275,11 @@ def double_reference(sample: dict, blanks: list[dict]):
         else:
             corrected = corrected_short
 
-        # Check: peak response near Rinse should be positive
-        peak_mask = (t >= rinse_time - 5) & (t <= rinse_time)
-        if peak_mask.any() and corrected[peak_mask].mean() > 0:
-            return corrected, blank['index']
+        return corrected, blank['index']
 
     # Fallback: no blank subtraction, just baseline-subtract
+    print(f"WARNING: No valid blank found for sample {sample['index']} (channel {sample['channel']}). "
+          f"Proceeding with baseline-subtracted signal without blank subtraction...")
     return s_bl, None
 
 
