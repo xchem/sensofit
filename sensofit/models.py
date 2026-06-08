@@ -146,6 +146,11 @@ def select_dmso_cal(sample_index: int, dmso_cals: list[dict], verbose=False) -> 
     If no DMSO Cal precedes the sample, returns the closest overall.
     """
     valid = [d for d in dmso_cals if _is_dmso_cal_valid(d, verbose=verbose)]
+    if not valid:
+        channel = dmso_cals[0]['channel'][:2] if dmso_cals else 'unknown'
+        rk_serie = dmso_cals[0].get('rk_serie_id', 'unknown') if dmso_cals else 'unknown'
+        raise ValueError(f"No valid DMSO Cal found in RK serie {rk_serie} for channel {channel}. "
+                         f"Please retry batch processing by excluding this channel.")
     preceding = [d for d in valid if d['index'] < sample_index]
     if preceding:
         return max(preceding, key=lambda d: d['index'])
@@ -191,6 +196,13 @@ def select_blank(sample_index: int, blanks: list[dict], verbose=False) -> dict:
     If no blank precedes the sample, returns the closest overall.
     """
     valid = [b for b in blanks if _is_blank_valid(b, verbose=verbose)]
+    if not valid:
+        if verbose:
+            channel = blanks[0]['channel'][:2] if blanks else 'unknown'
+            rk_serie = blanks[0].get('rk_serie_id', 'unknown') if blanks else 'unknown'
+            print(f"WARNING: No valid blank cycles found in RK serie {rk_serie} for channel {channel}.  "
+                  f"Proceeding without blank subtraction...")
+        return None
     preceding = [b for b in valid if b['index'] < sample_index]
     if preceding:
         return max(preceding, key=lambda b: b['index'])
@@ -284,10 +296,171 @@ def double_reference(sample: dict, blank: dict):
 
 
 # ---------------------------------------------------------------------------
-# Non-specific binder detection
+# Sensorgram heuristics and quality control.
 # ---------------------------------------------------------------------------
 
-def is_nonspecific_binder(sample: dict, threshold: float = 2.0):
+def _get_binding_response(sample: dict, blank: dict = None):
+    t = sample['time']
+    signal = sample['signal']
+    markers = sample['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    if blank:
+        signal_bl, _ = double_reference(sample, blank)
+    else:
+        bl_mask = t < inj_time
+        s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
+        signal_bl = signal - s_baseline
+
+    # check if there is a negative response after injection (t = inj_time -> t = inj_time + 5s)
+    inj_mask = (t >= inj_time) & (t <= inj_time + 5)
+    inj_resp = signal_bl[inj_mask].mean()
+    if inj_resp < -1.0:
+        return 0.0
+    
+    # 2-5 s before rinse: RI bulk gone, only true binding remains
+    resp_mask = (t >= rinse_time - 2) & (t <= rinse_time)
+    if not resp_mask.any():
+        return 0.0
+
+    bind_resp = float(signal_bl[resp_mask].mean())
+    return bind_resp
+
+
+def is_baseline_noisy(sample: dict, threshold: float = 5.0):
+    """Detect noisy baseline in a sample cycle.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        Standard deviation of the baseline signal above which it is considered noisy.  Default 5.0.
+
+    Returns
+    -------
+    noisy : bool
+        True if the baseline is noisy.
+    """
+    t = sample['time']
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    baseline_std = sample['signal'][bl_mask].std() if bl_mask.any() else 0.0
+    return baseline_std > threshold, baseline_std
+
+
+def has_injection_error(sample: dict, threshold: float = 10.0):
+    """Detect injection errors in a sample cycle.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        If - threshold > signal before injection > threshold: there is probably an injection error. Default 10.0.
+
+    Returns
+    -------
+    error : bool
+        True if the injection is erroneous.
+    inj_signal : float
+        Baseline-subtracted signal before injection, used for error assessment.
+    """
+    t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
+    s_bl = sample['signal'] - s_baseline
+    inj_mask = (t > inj_time - 25) & (t <= inj_time)
+    inj_signal = s_bl[inj_mask]
+    error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
+    return error, (inj_signal.min(), inj_signal.max())
+
+
+def is_FC1_negative(sample: dict, threshold: float = -5.0):
+    """Detect negative signal in reference channel (FC1), 
+    which will affect signal interpretation.
+    
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        If signal in raw_reference channel < threshold, FC1 is too negative. Default -5.0.
+    
+    Returns
+    -------
+    negative : bool
+        True if the raw_reference signal is too negative.
+    min_ref : float
+        Minimum value of the raw_reference signal, used for assessment.
+    """
+    t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
+    ref_signal = sample['raw_reference'] - s_baseline
+    min_ref = ref_signal.min()
+    return min_ref < threshold, min_ref
+
+
+def is_sample_carried_over(sample: dict, threshold: float = 10.0):
+    """Detect sample carryover at the end of the cycle.
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        If signal at the end of the cycle > threshold, there is probably carryover. Default 10.0.
+
+    Returns
+    -------
+    carryover : bool
+        True if there is likely sample carryover.
+    end_signal : float
+        Baseline-subtracted signal at the end of the cycle, used for assessment.    
+    """
+    t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
+    inj_time = sample['markers'].get('Injection', t[0])
+    rinse_time = sample['markers'].get('Rinse', t[-1])
+    bl_mask = t < inj_time
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
+    s_bl = sample['signal'] - s_baseline
+    end_signal = s_bl[-10:-1].mean()
+    return end_signal > threshold, end_signal
+
+
+def is_not_a_binder(sample: dict, blanks: list[dict] = None, threshold: float = 5.0):
+    """Detect non-binders from the primary sensorgram.
+
+    Non-binders show minimal binding response after injection, e.g. a flat
+    line or pure noise.  This is measured as a low baseline-subtracted
+    signal in the window 5-30 s after injection.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        Baseline-subtracted signal (pg/mm²) above which the sample is classified as a binder.  Default 5.0.
+
+    Returns
+    -------
+    not_binder : bool
+        True if the sample is classified as a non-binder.
+    post_inj_signal : float
+        Baseline-subtracted signal in the post-injection window, used for assessment.
+    """
+    blank = select_blank(sample['index'], blanks) if blanks else None
+    bind_resp = _get_binding_response(sample, blank)
+    return bind_resp <= threshold, bind_resp
+
+
+def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
