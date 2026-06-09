@@ -137,8 +137,8 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             kwargs['n_starts'] = n_starts
         result = fit_func(sample, ch_dmso, **kwargs)
         row = _extract_row(sample, result, mode)
-        row['flag'] = np.nan
-        row['flag_reason'] = np.nan
+        row['flag'] = True if heuristics else False
+        row['flag_reason'] = heuristics[0] if heuristics else np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
         row['flag'] = True

@@ -407,14 +407,19 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     return min_ref < threshold, min_ref
 
 
-def is_sample_carried_over(sample: dict, threshold: float = 5.0):
+def is_sample_carried_over(sample: dict, threshold: float = 5.0, time_window: float = 10.0):
     """Detect sample carryover at the end of the cycle.
+    Get the mean of the baseline-subtracted signal in the last 10 seconds of the cycle, 
+    and if it is above the threshold, there is probably carryover.
+
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
     threshold : float
         If signal at the end of the cycle > threshold, there is probably carryover. Default 5.0.
+    time_window : float
+        The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. Default 10.0.
 
     Returns
     -------
@@ -426,10 +431,12 @@ def is_sample_carried_over(sample: dict, threshold: float = 5.0):
     t = sample['time']
     bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
+    rinseend_time = sample['markers'].get('RinseEnd', t[-1])
     bl_mask = t < inj_time
+    ss_mask = (t >= rinseend_time - time_window) & (t <= rinseend_time) # last time_window seconds of the cycle
     s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
     s_bl = sample['signal'] - s_baseline
-    end_signal = s_bl[-10:-1].mean()
+    end_signal = s_bl[ss_mask].mean()
     return end_signal > threshold, end_signal
 
 
