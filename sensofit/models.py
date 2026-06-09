@@ -407,14 +407,14 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     return min_ref < threshold, min_ref
 
 
-def is_sample_carried_over(sample: dict, threshold: float = 10.0):
+def is_sample_carried_over(sample: dict, threshold: float = 5.0):
     """Detect sample carryover at the end of the cycle.
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
     threshold : float
-        If signal at the end of the cycle > threshold, there is probably carryover. Default 10.0.
+        If signal at the end of the cycle > threshold, there is probably carryover. Default 5.0.
 
     Returns
     -------
@@ -426,7 +426,6 @@ def is_sample_carried_over(sample: dict, threshold: float = 10.0):
     t = sample['time']
     bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
-    rinse_time = sample['markers'].get('Rinse', t[-1])
     bl_mask = t < inj_time
     s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
     s_bl = sample['signal'] - s_baseline
@@ -474,7 +473,7 @@ def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
         Sample cycle from load_cxw().
     threshold : float
         Reference dissociation signal (pg/mm²) above which the sample
-        is classified as a non-specific binder.  Default 2.0.
+        is classified as a non-specific binder.  Default 2.5.
 
     Returns
     -------
