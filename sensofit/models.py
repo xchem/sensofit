@@ -98,7 +98,7 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
     Parameters
     ----------
     dmso_cycle : dict
-        DMSO cal dict with 'time', 'raw_reference', 'markers'.
+        DMSO cal dict with 'time', 'raw_active', 'markers'.
     C_analyte : float
         Nominal analyte concentration (M).
     pulse_window : float
@@ -112,7 +112,7 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
         Pulsed concentration array on the DMSO time grid.
     """
     t = dmso_cycle['time']
-    sig = dmso_cycle['raw_reference'].copy()
+    sig = dmso_cycle['raw_active'].copy()
 
     # Baseline-subtract
     inj_time = dmso_cycle['markers'].get('Injection', t[0])
@@ -140,34 +140,105 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
     return c_func, c_raw
 
 
-def select_dmso_cal(sample_index: int, dmso_cals: list[dict]) -> dict:
-    """Select the nearest DMSO Cal cycle for a given sample index.
+def select_dmso_cal(sample_index: int, dmso_cals: list[dict], verbose=False) -> dict:
+    """Select the nearest preceding DMSO Cal cycle for a given sample index.
 
-    Uses the DMSO Cal. cycle with the closest index (preferring the
-    preceding one in case of ties).
+    If no DMSO Cal precedes the sample, returns the closest overall.
     """
-    best = min(dmso_cals,
-               key=lambda d: (abs(d['index'] - sample_index),
-                              d['index'] > sample_index))
-    return best
+    valid = [d for d in dmso_cals if _is_dmso_cal_valid(d, verbose=verbose)]
+    if not valid:
+        channel = dmso_cals[0]['channel'][:2] if dmso_cals else 'unknown'
+        rk_serie = dmso_cals[0].get('rk_serie_id', 'unknown') if dmso_cals else 'unknown'
+        raise ValueError(f"No valid DMSO Cal found in RK serie {rk_serie} for channel {channel}. "
+                         f"Please retry batch processing by excluding this channel.")
+    preceding = [d for d in valid if d['index'] < sample_index]
+    if preceding:
+        return max(preceding, key=lambda d: d['index'])
+    return min(valid, key=lambda d: abs(d['index'] - sample_index))
+
+
+def _is_dmso_cal_valid(dmso_cycle: dict, verbose=False) -> bool:
+    """Check if a DMSO Cal cycle is valid for concentration profile construction.
+
+    Criteria:
+    - Baseline signal std >= 5.0 ==> BAD (indicates a noisy baseline before injection).
+    - max(Response) <= 50 ==> BAD (indicates a weak or failed pulse).
+    - min(raw signal in Active channel) <= -10 ==> BAD (indicates a problem with the raw signal, e.g. sensor error or incorrect channel).
+    - Otherwise ==> GOOD (valid for c(t) construction).
+    """
+    t = dmso_cycle['time']
+    markers = dmso_cycle['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    bl_mask = t < inj_time
+    response_mask = (t >= inj_time) & (t <= rinse_time)
+    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][np.isclose(t, bl_time)][0]
+    dmso_signal = dmso_cycle['raw_active'] - baseline
+    baseline_std = dmso_signal[bl_mask].std() if bl_mask.any() else 0.0
+    max_response = dmso_signal[response_mask].max() if response_mask.any() else dmso_signal.max()
+    min_signal = dmso_signal.min()
+    if verbose and not (baseline_std <= 5.0 and max_response >= 50.0 and min_signal >= -10.0):
+        print(f"WARNING! DMSO Cal cycle {dmso_cycle['index']} ({dmso_cycle['channel']}) failed validity check "
+              f"(std={baseline_std:.2f}, max_response={max_response:.2f}, "
+              f"min_signal={min_signal:.2f}). This cycle will be excluded from "
+              "concentration profile construction.")
+    return baseline_std < 5.0 and max_response > 50.0 and min_signal > -10.0
 
 
 # ---------------------------------------------------------------------------
 # Blank selection and double referencing
 # ---------------------------------------------------------------------------
 
-def select_blank(sample_index: int, blanks: list[dict]) -> dict:
+def select_blank(sample_index: int, blanks: list[dict], verbose=False) -> dict:
     """Select the nearest preceding blank cycle for double referencing.
 
     If no blank precedes the sample, returns the closest overall.
     """
-    preceding = [b for b in blanks if b['index'] < sample_index]
+    valid = [b for b in blanks if _is_blank_valid(b, verbose=verbose)]
+    if not valid:
+        if verbose:
+            channel = blanks[0]['channel'][:2] if blanks else 'unknown'
+            rk_serie = blanks[0].get('rk_serie_id', 'unknown') if blanks else 'unknown'
+            print(f"WARNING: No valid blank cycles found in RK serie {rk_serie} for channel {channel}.  "
+                  f"Proceeding without blank subtraction...")
+        return None
+    preceding = [b for b in valid if b['index'] < sample_index]
     if preceding:
         return max(preceding, key=lambda b: b['index'])
-    return min(blanks, key=lambda b: abs(b['index'] - sample_index))
+    return min(valid, key=lambda b: abs(b['index'] - sample_index))
 
 
-def double_reference(sample: dict, blanks: list[dict]):
+def _is_blank_valid(blank: dict, verbose=False) -> bool:
+    """Check if a blank cycle is valid for double referencing.
+    Criteria:
+    - Baseline signal std > 2.5 ==> BAD (indicates a noisy baseline before injection).
+    - -5 >= Steady-state baseline-subtracted signal (currently mean of last 10 points) >= 5 ==> BAD (indicates a strong binding response in the blank).
+    - max(Baseline-subtracted signal) > 50 ==> BAD (indicates a strong binding response in the blank).
+    - Response between injection and rinse <= -5 ==> BAD (indicates a problem during injection)
+    - Otherwise ==> GOOD (valid for double referencing).
+    """
+    t = blank['time']
+    markers = blank['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    bl_mask = t < inj_time
+    response_mask = (t >= inj_time) & (t <= rinse_time)
+    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][np.isclose(t, bl_time)][0]
+    blank_signal = blank['signal'] - baseline
+    baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
+    steady_state = blank_signal[-10:].mean()
+    max_signal = blank_signal.max()
+    min_response = blank_signal[response_mask].min() if response_mask.any() else blank_signal.min()
+    if verbose and not (baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0):
+        print(f"WARNING! Blank cycle {blank['index']} ({blank['channel']}) failed validity check "
+              f"(std={baseline_std:.2f}, steady_state={steady_state:.2f}, "
+              f"max_signal={max_signal:.2f}, min_response={min_response:.2f}). "
+              "This blank will be excluded from double referencing.")
+    return baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0
+
+def double_reference(sample: dict, blank: dict):
     """Apply double referencing: subtract nearest preceding blank.
 
     If the subtraction yields a negative peak response near the Rinse
@@ -178,8 +249,8 @@ def double_reference(sample: dict, blanks: list[dict]):
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    blanks : list[dict]
-        Blank cycles from load_cxw().
+    blank : dict
+        Blank cycle from load_cxw().
 
     Returns
     -------
@@ -189,26 +260,22 @@ def double_reference(sample: dict, blanks: list[dict]):
         Index of the blank used, or None if fallback (no blank subtraction).
     """
     t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
     rinse_time = sample['markers'].get('Rinse', t[-1])
     n = len(t)
 
     # Baseline-subtract sample
     bl_mask = t < inj_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else 0.0
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
     s_bl = sample['signal'] - s_baseline
 
-    # Sort blanks: preceding first (nearest first), then following
-    candidates = sorted(
-        blanks,
-        key=lambda b: (b['index'] > sample['index'],
-                       abs(b['index'] - sample['index'])))
-
-    for blank in candidates:
+    if blank:
+        # Baseline-subtract blank
         n_b = len(blank['signal'])
         n_min = min(n, n_b)
         bl_mask_b = t[:n_min] < inj_time
-        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else 0.0
+        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min][np.isclose(t, bl_time)][0]
         b_bl = blank['signal'][:n_min] - b_baseline
         corrected_short = s_bl[:n_min] - b_bl
 
@@ -220,20 +287,213 @@ def double_reference(sample: dict, blanks: list[dict]):
         else:
             corrected = corrected_short
 
-        # Check: peak response near Rinse should be positive
-        peak_mask = (t >= rinse_time - 5) & (t <= rinse_time)
-        if peak_mask.any() and corrected[peak_mask].mean() > 0:
-            return corrected, blank['index']
+        return corrected, blank['index']
 
     # Fallback: no blank subtraction, just baseline-subtract
+    print(f"WARNING: No valid blank found for sample {sample['index']} (channel {sample['channel']}). "
+          f"Proceeding with baseline-subtracted signal without blank subtraction...")
     return s_bl, None
 
 
 # ---------------------------------------------------------------------------
-# Non-specific binder detection
+# Sensorgram heuristics and quality control.
 # ---------------------------------------------------------------------------
 
-def is_nonspecific_binder(sample: dict, threshold: float = 2.0):
+def _get_binding_response(sample: dict, blank: dict = None):
+    """Calculate the binding response for a sample cycle. 
+    The binding response is defined as the mean double-referenced signal 
+    in the window 2 seconds before the Rinse marker.
+
+    This function also checks for a negative response immediately after injection, 
+    which may indicate an injection error. If such an error is detected, the function 
+    returns 0.0 as the binding response.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    blank : dict or None
+        Blank cycle for double referencing. If None, only baseline subtraction is applied.
+
+    Returns
+    -------
+    bind_resp : float
+        The calculated binding response (pg/mm²). 
+        If an injection error is detected, returns 0.0.
+    """
+    t = sample['time']
+    signal = sample['signal']
+    markers = sample['markers']
+    bl_time = markers.get('Baseline', t[0])
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    if blank:
+        signal_bl, _ = double_reference(sample, blank)
+    else:
+        bl_mask = t < inj_time
+        s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
+        signal_bl = signal - s_baseline
+
+    # check if there is a negative response after injection (t = inj_time -> t = inj_time + 5s)
+    inj_mask = (t >= inj_time) & (t <= inj_time + 5)
+    inj_resp = signal_bl[inj_mask].mean()
+    if inj_resp < -1.0:
+        return 0.0
+    
+    # 2-5 s before rinse: RI bulk gone, only true binding remains
+    resp_mask = (t >= rinse_time - 2) & (t <= rinse_time)
+    if not resp_mask.any():
+        return 0.0
+
+    bind_resp = float(signal_bl[resp_mask].mean())
+    return bind_resp
+
+
+def is_baseline_noisy(sample: dict, signal: np.ndarray, threshold: float = 5.0):
+    """Detect noisy baseline in a sample cycle.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
+    threshold : float
+        Threshold for the standard deviation of the double-referenced signal above which it is considered noisy. 
+        Default 5.0.
+
+    Returns
+    -------
+    noisy : bool
+        True if the baseline is noisy.
+    baseline_std : float
+        Standard deviation of the double-referenced signal, used for assessment.
+    """
+    t = sample['time']
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
+    return baseline_std > threshold, baseline_std
+
+
+def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.0):
+    """Detect injection errors in a sample cycle.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
+    threshold : float
+        Threshold for the absolute value of the double-referenced signal before injection 
+        above which it is considered an injection error. Default 10.0.
+
+    Returns
+    -------
+    error : bool
+        True if - threshold > signal before injection > threshold.
+    inj_signal : float
+        double-referenced signal before injection, used for error assessment.
+    """
+    t = sample['time']
+    inj_time = sample['markers'].get('Injection', t[0])
+    inj_mask = (t > inj_time - 25) & (t <= inj_time)
+    inj_signal = signal[inj_mask]
+    error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
+    return error, (inj_signal.min(), inj_signal.max())
+
+
+def is_FC1_negative(sample: dict, threshold: float = -5.0):
+    """Detect negative signal in reference channel (FC1), 
+    which will affect signal interpretation.
+    
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    threshold : float
+        Threshold for the signal in the raw_reference channel (FC1) below which it is considered too negative. 
+        Default -5.0.
+
+    Returns
+    -------
+    negative : bool
+        True if signal in raw_reference channel < threshold.
+    min_ref : float
+        Minimum value of the raw_reference signal, used for assessment.
+    """
+    t = sample['time']
+    bl_time = sample['markers'].get('Baseline', t[0])
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
+    ref_signal = sample['raw_reference'] - s_baseline
+    min_ref = ref_signal.min()
+    return min_ref < threshold, min_ref
+
+
+def is_sample_carried_over(sample: dict, signal: np.ndarray, threshold: float = 5.0, time_window: float = 10.0):
+    """Detect sample carryover at the end of the cycle.
+    Get the mean of the baseline-subtracted signal in the last 10 seconds of the cycle, 
+    and if it is above the threshold, there is probably carryover.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
+    threshold : float
+        Threshold for the baseline-subtracted signal at the end of the cycle above which there is probably carryover. 
+        Default 5.0.
+    time_window : float
+        The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. 
+        Default 10.0.
+
+    Returns
+    -------
+    carryover : bool
+        True if signal at the end of the cycle > threshold.
+    end_signal : float
+        Baseline-subtracted signal at the end of the cycle, used for assessment.    
+    """
+    t = sample['time']
+    rinseend_time = sample['markers'].get('RinseEnd', t[-1])
+    ss_mask = (t >= rinseend_time - time_window) & (t <= rinseend_time) # last time_window seconds of the cycle
+    end_signal = signal[ss_mask].mean()
+    return end_signal > threshold, end_signal
+
+
+def is_not_a_binder(sample: dict, blank: dict, threshold: float = 5.0):
+    """Detect non-binders from the primary sensorgram.
+
+    Non-binders show minimal binding response before rinse, e.g. a flat
+    line or pure noise.  This is measured as a low double-referenced
+    signal in the window 2 s before rinse.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    blank : dict
+        Blank cycle for baseline subtraction.
+    threshold : float
+        Threshold for the double-referenced signal below which the sample is classified as a non-binder. 
+        Default 5.0.
+
+    Returns
+    -------
+    not_binder : bool
+        True if the sample is classified as a non-binder.
+    bind_resp : float
+        Binding response (pg/mm²), used for assessment.
+    """
+    bind_resp = _get_binding_response(sample, blank)
+    return bind_resp <= threshold, bind_resp
+
+
+def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
@@ -247,7 +507,7 @@ def is_nonspecific_binder(sample: dict, threshold: float = 2.0):
         Sample cycle from load_cxw().
     threshold : float
         Reference dissociation signal (pg/mm²) above which the sample
-        is classified as a non-specific binder.  Default 2.0.
+        is classified as a non-specific binder.  Default 2.5.
 
     Returns
     -------

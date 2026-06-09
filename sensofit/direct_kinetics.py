@@ -17,9 +17,8 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 """
 
 import numpy as np
-from .models import (build_concentration_profile, select_dmso_cal, simulate_sensorgram,
-                     smooth_and_differentiate,
-                     double_reference)
+from .models import (build_concentration_profile, select_blank, select_dmso_cal,
+                     simulate_sensorgram, smooth_and_differentiate, double_reference)
 
 
 def direct_kinetics_fit(t, R_smooth, dRdt, c, w=None, lambda_reg=0.0):
@@ -153,19 +152,13 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         ka, kd, Rmax, KD, and auxiliary arrays.
     """
     t = sample['time']
+    blank = select_blank(sample['index'], blanks) if blanks else None
     dmso = select_dmso_cal(sample['index'], dmso_cals)
     c_func, c_raw = build_concentration_profile(dmso, sample['concentration_M'])
 
     # --- Double referencing ---
-    if blanks:
-        signal_bl, blank_index = double_reference(sample, blanks)
-    else:
-        inj_time = sample['markers'].get('Injection', t[0])
-        bl_mask = t < inj_time
-        baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else 0.0
-        signal_bl = sample['signal'] - baseline
-        blank_index = None
-
+    signal_bl, blank_index = double_reference(sample, blank)
+    
     # --- Full-sensorgram Direct Kinetics ---
     # Weight the entire Injection→RinseEnd window so the DK linear solver
     # sees both association (c > 0 → constrains ka) and dissociation (c = 0

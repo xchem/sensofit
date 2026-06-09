@@ -15,13 +15,15 @@ import pandas as pd
 from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
-from .models import is_nonspecific_binder
+from .models import (is_baseline_noisy, has_injection_error, is_FC1_negative,
+                     is_sample_carried_over, is_not_a_binder, is_nonspecific_binder,
+                     double_reference, select_blank)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
 
-def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
-              progress=True, n_starts=3, n_parallel_jobs=None):
+def batch_fit(filepath, mode='dk', channels='all', progress=True,
+              n_starts=3, n_parallel_jobs=None):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -37,9 +39,6 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
         Fitting mode:
         - ``'dk'``:  Direct Kinetics only (fast, ~ms/sample).
         - ``'ode'``: DK → ODE refinement (slower, ~15s/sample).
-    include_nsb : bool
-        If True, fit non-specific binders instead of skipping them.
-        They are still flagged in the ``nonspecific`` column.
     channels : str or list[int]
         Which active flow cells to process.
         - ``'all'`` (default): every active channel in the file.
@@ -79,12 +78,12 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
 
     if n_parallel_jobs:
         all_results = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
-            delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb,
-                                   mode, fit_func, n_starts) for i, sample in enumerate(samples)
+            delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
+                                    fit_func, n_starts) for i, sample in enumerate(samples)
         )
     else:
-        all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb,
-                                      mode, fit_func, n_starts) for i, sample in enumerate(samples)]
+        all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
+                                      fit_func, n_starts) for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
     rows = [r[1] for r in all_results]
@@ -103,7 +102,7 @@ def batch_fit(filepath, mode='dk', include_nsb=False, channels='all',
     return df, data, results
 
 
-def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb, mode, fit_func, n_starts):
+def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func, n_starts):
     """Process a single sample with error handling and NSB filtering."""
     if progress:
         elapsed = time.time() - t0
@@ -125,13 +124,12 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb, m
         ch_blanks = blanks
 
     # Check for non-specific binding before fitting
-    nsb, ref_dissoc = is_nonspecific_binder(sample)
-    if nsb and not include_nsb:
+    heuristics = sensorgram_heuristics(sample, blanks=ch_blanks)
+    if len(heuristics) >= 2 or "injection_issue" in heuristics or "negative_signal_in_FC1" in heuristics or "no_binding" in heuristics:
         row = _fallback_row(sample, mode)
-        row['fit_mode'] = 'nsb'
-        row['fit_error'] = None
-        row['nonspecific'] = True
-        row['ref_dissoc'] = ref_dissoc
+        row['flag'] = True
+        row['flag_reason'] = '; '.join(heuristics)
+        row['success'] = np.nan
         return [None, row]
 
     try:
@@ -140,28 +138,28 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, include_nsb, m
             kwargs['n_starts'] = n_starts
         result = fit_func(sample, ch_dmso, **kwargs)
         row = _extract_row(sample, result, mode)
-        row['fit_error'] = None
+        row['flag'] = True if heuristics else False
+        row['flag_reason'] = heuristics[0] if heuristics else np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
-        row['fit_error'] = str(e)
+        row['flag'] = True
+        row['flag_reason'] = str(e)
         return [None, row]
-
-    row['nonspecific'] = False
-    row['ref_dissoc'] = ref_dissoc
 
     return [result, row]
 
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""
     row = {
-        'compound':        sample['compound'],
-        'concentration_M': sample['concentration_M'],
+        'compound_type':    sample['cycle_type'],
+        'compound':         sample['compound'],
+        'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':              sample.get('mw'),
-        'slot':            sample.get('slot'),
-        'cycle_index':     sample['index'],
-        'channel':         sample.get('channel', ''),
-        'rk_serie_id':    sample.get('rk_serie_id'),
+        'mw':               sample.get('mw'),
+        'slot':             sample.get('slot'),
+        'cycle_index':      sample['index'],
+        'channel':          sample.get('channel', ''),
+        'rk_serie_id':      sample.get('rk_serie_id'),
     }
 
     if mode == 'dk':
@@ -186,7 +184,7 @@ def _extract_row(sample, result, mode):
             'Rmax':         result['Rmax'],
             'KD':           result['KD'],
             'KD_uM':        result['KD'] * 1e6,
-            'Sqrt(Chi2)':   result.get('Sqrt(Chi2)', np.nan),
+            'sqrt_chi2':    result.get('sqrt_chi2', np.nan),
             'ka_se':        result.get('ka_se', np.nan),
             'kd_se':        result.get('kd_se', np.nan),
             'Rmax_se':      result.get('Rmax_se', np.nan),
@@ -214,26 +212,63 @@ def _extract_row(sample, result, mode):
 def _fallback_row(sample, mode):
     """Return an all-NaN row when fitting raises an exception."""
     row = {
-        'compound':        sample['compound'],
-        'concentration_M': sample['concentration_M'],
+        'compound_type':    sample['cycle_type'],
+        'compound':         sample['compound'],
+        'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':              sample.get('mw'),
-        'slot':            sample.get('slot'),
-        'cycle_index':     sample['index'],
-        'channel':         sample.get('channel', ''),
-        'rk_serie_id':    sample.get('rk_serie_id'),
-        'ka':              np.nan,
-        'kd':              np.nan,
-        'Rmax':            np.nan,
-        'KD':              np.nan,
-        'KD_uM':           np.nan,
-        'Sqrt(Chi2)':      np.nan,
-        'sigma_res':       np.nan,
-        'n_points':        0,
-        'fit_mode':        mode,
-        'success':         False,
+        'mw':               sample.get('mw'),
+        'slot':             sample.get('slot'),
+        'cycle_index':      sample['index'],
+        'channel':          sample.get('channel', ''),
+        'rk_serie_id':      sample.get('rk_serie_id'),
+        'ka':               np.nan,
+        'kd':               np.nan,
+        'Rmax':             np.nan,
+        'KD':               np.nan,
+        'KD_uM':            np.nan,
+        'sqrt_chi2':        np.nan,
+        'sigma_res':        np.nan,
+        'n_points':         0,
+        'fit_mode':         mode,
+        'success':          False,
     }
     return row
+
+
+def sensorgram_heuristics(sample, blanks=None):
+    """Heuristic to flag sensorgram to check if they should be fitted or not.
+    Criteria:
+    - Noisy: baseline std > 5
+    - Injection issue: -10 > signal before injection > 10
+    - Negative signal in FC1: min signal < -5
+    - No binding: binding response < 5
+    - Sample carryover: steady-state signal > 10
+    - Non-specific binding: signal after rinse in reference channel > 2.5
+    """
+    if blanks:
+        blank = select_blank(sample['index'], blanks)
+    signal, _ = double_reference(sample, blank)
+
+    heuristics = []
+    noisy, _ = is_baseline_noisy(sample, signal)
+    if noisy:
+        heuristics.append('noisy')
+    inj_error, _ = has_injection_error(sample, signal)
+    if inj_error:
+        heuristics.append('injection_issue')
+    neg_FC1, _ = is_FC1_negative(sample)
+    if neg_FC1:
+        heuristics.append('negative_signal_in_FC1')
+    no_bind, _ = is_not_a_binder(sample, blank=blank)
+    if no_bind:
+        heuristics.append('no_binding')
+    carryover, _ = is_sample_carried_over(sample, signal)
+    if carryover:
+        heuristics.append('sample_carryover')
+    nsb, _ = is_nonspecific_binder(sample)
+    if nsb:
+        heuristics.append('non_specific_interaction')
+    return heuristics
 
 
 def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
@@ -264,12 +299,12 @@ def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
 
     for _, row in df.iterrows():
         r = []
-        if row.get('nonspecific', False):
-            r.append('nonspecific_binder')
-        elif not row.get('success', False):
+        if row.get('flag', False):
+            flags.append(row.get('flag', False))
+            reasons.append(row.get('flag_reason', ''))
+            continue  # Preserve existing flags and reasons
+        if not row.get('success', False):
             r.append('fit_failed')
-        if pd.notna(row.get('fit_error')) and row['fit_error']:
-            r.append('exception')
         if pd.notna(row.get('kd')) and row['kd'] >= kd_max:
             r.append('kd_at_bound')
         if pd.notna(row.get('ka')) and row['ka'] <= ka_min:

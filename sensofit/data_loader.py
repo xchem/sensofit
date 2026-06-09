@@ -3,7 +3,7 @@
 A .cxw file is a ZIP archive containing:
   - _project.cx3   : XML with cycle metadata, flow cell config, markers
   - cyclesData.h5   : HDF5 with raw channel data keyed by cycle GUID
-  - Wizard/*.cx3    : XML with reagent/sample definitions per serie
+  - Wizard/*.cx3    : XML with reagent/immobilization/sample definitions per serie
   - Evaluations/    : XML with per-compound kinetic fit results (not used here)
   - Correctors/     : XML with timing/offset corrections (not used here)
 """
@@ -221,6 +221,9 @@ def  _build_reagent_lookup(zf: zipfile.ZipFile, serie_guids: list[str]) -> list[
                 continue
             wiz = _parse_xml(zf, fname)
             if wiz.findtext('SerieId') != serie_guid:
+                continue
+            if wiz.findtext('Name') != 'RAPID Kinetics':
+                print(f'WARNING! Unexpected Wizard name "{wiz.findtext("Name")}", expected "RAPID Kinetics", skipping reagent lookup.')
                 continue
             for rack_tag, side in (('LeftRack', 'Left'), ('RightRack', 'Right')):
                 rack = wiz.find(rack_tag)
@@ -552,11 +555,11 @@ def _extract_autosampler(rk_series: list[ET.Element]) -> list[dict]:
     return out
 
 
-def _extract_immobilization(project_root: ET.Element,
+def _extract_rk_series_info(project_root: ET.Element,
                             rk_series: list[ET.Element]) -> list[dict]:
-    """Summary of the Immobilization serie (chip prep)."""
+    """Summary of the RapidKinetics series information."""
     if not rk_series:
-        return {}
+        return []
     info = []
     for i, rk_serie in enumerate(rk_series):
         meta = rk_serie.find('Meta')
@@ -611,10 +614,124 @@ def _extract_report_points(rk_series: list[ET.Element]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Wizard reagent lookup — extended with category and volume
+# Immobilization Series and Immobilization Wizard lookups
 # ---------------------------------------------------------------------------
 
+def _extract_immobilizations(immo_series: list[ET.Element], immo_lookups: list[dict], h5f: h5py.File) -> list[dict]:
+    """Extract immobilization series info and capture-level traces from HDF5.
 
+    Returns a list of dicts with keys:
+      - `serie_id`, `name`, `cycles` (list)
+    Each cycle dict contains:
+      - `cycle_type`, `construct`, `guid`, `capture_level` (dict mapping FC1..FC4 to
+         either None or {'time': ndarray, 'level': ndarray}).
+    """
+    out = []
+    if not immo_series:
+        return out
+
+    for i, serie in enumerate(immo_series):
+        lookup = immo_lookups[i] if i < len(immo_lookups) else {}
+        serie_id = serie.findtext('Id', '')
+        serie_name = serie.findtext('Name', '')
+        cycles_out = []
+
+        for cyc in serie.find('Cycles').findall('Cycle'):
+            cycle_type = cyc.findtext('CycleType', '')
+            guid = (cyc.findtext('Guid') or '').strip()
+            construct = cyc.findtext('Name', '')
+
+            # Build capture_level as requested:
+            # {"time": array(time_data), "FC1": array(...), ...}
+            time = None
+            if guid:
+                time_key = f'{guid}.0'
+                if time_key in h5f:
+                    try:
+                        time = h5f[time_key][:]
+                    except Exception:
+                        time = None
+
+            capture_level = {'time': time}
+            for fc in range(1, 5):
+                ch = _fc_to_channel(fc)
+                ch_key = f'{guid}.{ch}' if guid else None
+                arr = None
+                if ch_key and ch_key in h5f:
+                    try:
+                        arr = h5f[ch_key][:]
+                    except Exception:
+                        arr = None
+                capture_level[f'FC{fc}'] = arr
+
+            cycles_out.append({
+                'cycle_type': cycle_type,
+                'construct': construct,
+                'guid': guid,
+                'capture_level': capture_level,
+            })
+
+        out.append({
+            'serie_id': serie_id,
+            'name': serie_name,
+            'cycles': cycles_out,
+            'immobilization_lookup': lookup,
+        })
+
+    return out
+
+def _build_immobilization_lookup(zf: zipfile.ZipFile, immo_guids: list[str]) -> list[dict]:
+    """Parse the Immobilization Wizard to build a ``Channel → capture``
+    lookup.
+    """
+    lookups = []
+    channels = [f'FC{i}' for i in range(1, 5)]
+    for immo_guid in immo_guids:
+        lookup = {
+            'immobilization_type': '',
+            'method': '',
+            'channels': {name: None for name in channels},
+        }
+        for fname in zf.namelist():
+            if not fname.startswith('Wizard/'):
+                continue
+            wiz = _parse_xml(zf, fname)
+            if wiz.findtext('SerieId') != immo_guid:
+                continue
+            if wiz.findtext('Name') != 'Immobilisation Wizard':
+                print(
+                    f'WARNING! Unexpected Wizard name "{wiz.findtext("Name")}", '
+                    'expected "Immobilisation Wizard", skipping immobilization lookup.')
+                continue
+
+            lookup['immobilization_type'] = wiz.findtext('CurrentImmobilizationType', '')
+            lookup['method'] = wiz.findtext('Method', '')
+
+            for channel in channels:
+                for lig in wiz.findall('.//ImmobilizationLigand'):
+                    for sfc in lig.findall('.//SelectableFlowCells'):
+                        designation = (sfc.findtext('FlowCell/Designation') or '').strip()
+                        if designation != channel:
+                            continue
+                        selected = (sfc.findtext('Selected') or '').strip().lower() == 'true'
+                        if not selected:
+                            continue
+
+                        name = lig.findtext('ReagentName', '')
+                        ph = lig.findtext('ReagentPh', '')
+                        concentration = lig.findtext('Concentration', '')
+                        capture_level = lig.findtext('CaptureLevel', '')
+                        if lookup['channels'][channel] is None:
+                            lookup['channels'][channel] = {
+                                'name': name,
+                                'pH': ph,
+                                'concentration': concentration,
+                                'capture_level': capture_level,
+                            }
+
+        lookups.append(lookup)
+    return lookups
+    
 
 
 # ---------------------------------------------------------------------------
@@ -817,24 +934,31 @@ def load_cxw(filepath: str, channels='all') -> dict:
                     f'No matching channels. Requested {channels}, '
                     f'available active FCs: {avail}')
 
-        # Find RAPID Kinetics series
+        # Find RAPID Kinetics and Immobilization series
         rk_series = []
+        immo_series = []
         rk_guids = []
+        immo_guids = []
         for serie in project.findall('.//Serie'):
             if serie.findtext('Type') == 'Pulse':
                 rk_series.append(serie)
                 rk_guid = serie.findtext('Guid', '')
                 rk_guids.append(rk_guid)
+            elif serie.findtext('Type') == 'Immobilization':
+                immo_series.append(serie)
+                immo_guid = serie.findtext('Guid', '')
+                immo_guids.append(immo_guid)
 
-        # Reagent lookup from wizard
+        # Reagent and Immobilization lookups from Wizards
         reagent_lookups = _build_reagent_lookup(zf, rk_guids)
+        immo_lookups = _build_immobilization_lookup(zf, immo_guids)
 
         # Extended project / instrument / buffers / autosampler / report points
         project_meta = _extract_project_meta(zf)
         instrument = _extract_instrument(project, rk_series if rk_series else None)
+        rk_series_info = _extract_rk_series_info(project, rk_series if rk_series else None)
         buffers = _extract_buffers(rk_series if rk_series else None)
         autosamplers = _extract_autosampler(rk_series if rk_series else None)
-        immobilizations = _extract_immobilization(project, rk_series if rk_series else None)
         report_points = _extract_report_points(rk_series if rk_series else None)
 
         # (side, slot) → {category, volume_uL, ...}  for cycle merging
@@ -852,6 +976,9 @@ def load_cxw(filepath: str, channels='all') -> dict:
         h5_bytes = zf.read('cyclesData.h5')
 
     h5f = h5py.File(io.BytesIO(h5_bytes), 'r')
+
+    # Extract immobilization traces (time + channel levels) from HDF5
+    immobilizations = _extract_immobilizations(immo_series, immo_lookups, h5f)
 
     samples = []
     dmso_cals = []
@@ -901,9 +1028,10 @@ def load_cxw(filepath: str, channels='all') -> dict:
         },
         'project': project_meta,
         'instrument': instrument,
+        'rk_series_info': rk_series_info,
         'buffers': buffers,
         'autosampler': autosamplers,
-        'immobilization': immobilizations,
+        'immobilizations': immobilizations,
         'report_points': report_points,
         'samples': samples,
         'dmso_cals': dmso_cals,
