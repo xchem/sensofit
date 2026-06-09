@@ -16,7 +16,8 @@ from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_error, is_FC1_negative,
-                     is_sample_carried_over, is_not_a_binder, is_nonspecific_binder)
+                     is_sample_carried_over, is_not_a_binder, is_nonspecific_binder,
+                     double_reference, select_blank)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
@@ -244,20 +245,24 @@ def sensorgram_heuristics(sample, blanks=None):
     - Sample carryover: steady-state signal > 10
     - Non-specific binding: signal after rinse in reference channel > 2.5
     """
+    if blanks:
+        blank = select_blank(sample['index'], blanks)
+    signal, _ = double_reference(sample, blank)
+
     heuristics = []
-    noisy, _ = is_baseline_noisy(sample)
+    noisy, _ = is_baseline_noisy(sample, signal)
     if noisy:
         heuristics.append('noisy')
-    inj_error, _ = has_injection_error(sample)
+    inj_error, _ = has_injection_error(sample, signal)
     if inj_error:
         heuristics.append('injection_issue')
     neg_FC1, _ = is_FC1_negative(sample)
     if neg_FC1:
         heuristics.append('negative_signal_in_FC1')
-    no_bind, _ = is_not_a_binder(sample, blanks=blanks)
+    no_bind, _ = is_not_a_binder(sample, blank=blank)
     if no_bind:
         heuristics.append('no_binding')
-    carryover, _ = is_sample_carried_over(sample)
+    carryover, _ = is_sample_carried_over(sample, signal)
     if carryover:
         heuristics.append('sample_carryover')
     nsb, _ = is_nonspecific_binder(sample)

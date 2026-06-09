@@ -300,6 +300,27 @@ def double_reference(sample: dict, blank: dict):
 # ---------------------------------------------------------------------------
 
 def _get_binding_response(sample: dict, blank: dict = None):
+    """Calculate the binding response for a sample cycle. 
+    The binding response is defined as the mean double-referenced signal 
+    in the window 2 seconds before the Rinse marker.
+
+    This function also checks for a negative response immediately after injection, 
+    which may indicate an injection error. If such an error is detected, the function 
+    returns 0.0 as the binding response.
+
+    Parameters
+    ----------
+    sample : dict
+        Sample cycle from load_cxw().
+    blank : dict or None
+        Blank cycle for double referencing. If None, only baseline subtraction is applied.
+
+    Returns
+    -------
+    bind_resp : float
+        The calculated binding response (pg/mm²). 
+        If an injection error is detected, returns 0.0.
+    """
     t = sample['time']
     signal = sample['signal']
     markers = sample['markers']
@@ -328,53 +349,57 @@ def _get_binding_response(sample: dict, blank: dict = None):
     return bind_resp
 
 
-def is_baseline_noisy(sample: dict, threshold: float = 5.0):
+def is_baseline_noisy(sample: dict, signal: np.ndarray, threshold: float = 5.0):
     """Detect noisy baseline in a sample cycle.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
     threshold : float
-        Standard deviation of the baseline signal above which it is considered noisy.  Default 5.0.
+        Threshold for the standard deviation of the double-referenced signal above which it is considered noisy. 
+        Default 5.0.
 
     Returns
     -------
     noisy : bool
         True if the baseline is noisy.
+    baseline_std : float
+        Standard deviation of the double-referenced signal, used for assessment.
     """
     t = sample['time']
     inj_time = sample['markers'].get('Injection', t[0])
     bl_mask = t < inj_time
-    baseline_std = sample['signal'][bl_mask].std() if bl_mask.any() else 0.0
+    baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
     return baseline_std > threshold, baseline_std
 
 
-def has_injection_error(sample: dict, threshold: float = 10.0):
+def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.0):
     """Detect injection errors in a sample cycle.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
     threshold : float
-        If - threshold > signal before injection > threshold: there is probably an injection error. Default 10.0.
+        Threshold for the absolute value of the double-referenced signal before injection 
+        above which it is considered an injection error. Default 10.0.
 
     Returns
     -------
     error : bool
-        True if the injection is erroneous.
+        True if - threshold > signal before injection > threshold.
     inj_signal : float
-        Baseline-subtracted signal before injection, used for error assessment.
+        double-referenced signal before injection, used for error assessment.
     """
     t = sample['time']
-    bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
-    bl_mask = t < inj_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
-    s_bl = sample['signal'] - s_baseline
     inj_mask = (t > inj_time - 25) & (t <= inj_time)
-    inj_signal = s_bl[inj_mask]
+    inj_signal = signal[inj_mask]
     error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
     return error, (inj_signal.min(), inj_signal.max())
 
@@ -388,12 +413,13 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     sample : dict
         Sample cycle from load_cxw().
     threshold : float
-        If signal in raw_reference channel < threshold, FC1 is too negative. Default -5.0.
-    
+        Threshold for the signal in the raw_reference channel (FC1) below which it is considered too negative. 
+        Default -5.0.
+
     Returns
     -------
     negative : bool
-        True if the raw_reference signal is too negative.
+        True if signal in raw_reference channel < threshold.
     min_ref : float
         Minimum value of the raw_reference signal, used for assessment.
     """
@@ -407,7 +433,7 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     return min_ref < threshold, min_ref
 
 
-def is_sample_carried_over(sample: dict, threshold: float = 5.0, time_window: float = 10.0):
+def is_sample_carried_over(sample: dict, signal: np.ndarray, threshold: float = 5.0, time_window: float = 10.0):
     """Detect sample carryover at the end of the cycle.
     Get the mean of the baseline-subtracted signal in the last 10 seconds of the cycle, 
     and if it is above the threshold, there is probably carryover.
@@ -416,52 +442,53 @@ def is_sample_carried_over(sample: dict, threshold: float = 5.0, time_window: fl
     ----------
     sample : dict
         Sample cycle from load_cxw().
+    signal : np.ndarray
+        double-referenced signal from sample.
     threshold : float
-        If signal at the end of the cycle > threshold, there is probably carryover. Default 5.0.
+        Threshold for the baseline-subtracted signal at the end of the cycle above which there is probably carryover. 
+        Default 5.0.
     time_window : float
-        The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. Default 10.0.
+        The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. 
+        Default 10.0.
 
     Returns
     -------
     carryover : bool
-        True if there is likely sample carryover.
+        True if signal at the end of the cycle > threshold.
     end_signal : float
         Baseline-subtracted signal at the end of the cycle, used for assessment.    
     """
     t = sample['time']
-    bl_time = sample['markers'].get('Baseline', t[0])
-    inj_time = sample['markers'].get('Injection', t[0])
     rinseend_time = sample['markers'].get('RinseEnd', t[-1])
-    bl_mask = t < inj_time
     ss_mask = (t >= rinseend_time - time_window) & (t <= rinseend_time) # last time_window seconds of the cycle
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
-    s_bl = sample['signal'] - s_baseline
-    end_signal = s_bl[ss_mask].mean()
+    end_signal = signal[ss_mask].mean()
     return end_signal > threshold, end_signal
 
 
-def is_not_a_binder(sample: dict, blanks: list[dict] = None, threshold: float = 5.0):
+def is_not_a_binder(sample: dict, blank: dict, threshold: float = 5.0):
     """Detect non-binders from the primary sensorgram.
 
-    Non-binders show minimal binding response after injection, e.g. a flat
-    line or pure noise.  This is measured as a low baseline-subtracted
-    signal in the window 5-30 s after injection.
+    Non-binders show minimal binding response before rinse, e.g. a flat
+    line or pure noise.  This is measured as a low double-referenced
+    signal in the window 2 s before rinse.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
+    blank : dict
+        Blank cycle for baseline subtraction.
     threshold : float
-        Baseline-subtracted signal (pg/mm²) above which the sample is classified as a binder.  Default 5.0.
+        Threshold for the double-referenced signal below which the sample is classified as a non-binder. 
+        Default 5.0.
 
     Returns
     -------
     not_binder : bool
         True if the sample is classified as a non-binder.
-    post_inj_signal : float
-        Baseline-subtracted signal in the post-injection window, used for assessment.
+    bind_resp : float
+        Binding response (pg/mm²), used for assessment.
     """
-    blank = select_blank(sample['index'], blanks) if blanks else None
     bind_resp = _get_binding_response(sample, blank)
     return bind_resp <= threshold, bind_resp
 
