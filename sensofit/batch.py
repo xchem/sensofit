@@ -240,10 +240,10 @@ def sensorgram_heuristics(sample, blanks=None):
     Criteria:
     - Noisy: baseline std > 5% of max abs(signal)
     - Injection issue: -10% of max(abs(signal)) > signal before injection > 10% of max(abs(signal))
-    - Negative signal in reference channel: min signal < 1% of -max(abs(signal))
+    - Negative signal in reference channel: min signal < 5% of -max(abs(reference signal))
     - Low signal-to-noise response: binding response < 5% of max(abs(signal))
     - Sample carryover: steady-state signal > 10% of max(abs(signal))
-    - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(signal))
+    - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(reference signal))
     """
     if blanks:
         blank = select_blank(sample['index'], blanks)

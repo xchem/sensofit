@@ -398,7 +398,7 @@ def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: flo
     return error, (inj_signal.min(), inj_signal.max())
 
 
-def is_reference_signal_negative(sample: dict, percent_threshold: float = 1.0):
+def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
     """Detect negative signal in reference channel, 
     which will affect signal interpretation.
     
@@ -409,7 +409,7 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 1.0):
     percent_threshold : float
         Threshold for the baseline-subtracted signal in the raw_reference channel 
         below which it is considered too negative. 
-        Default 1.0% of -abs(max(signal)).
+        Default 5.0% of -abs(max(signal)).
 
     Returns
     -------
