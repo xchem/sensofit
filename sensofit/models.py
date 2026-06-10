@@ -428,9 +428,6 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 1.0):
     signal_bl = sample['signal'] - s_baseline
     ref_signal = sample['raw_reference'][signal_mask] - s_baseline
     min_ref = ref_signal.min()
-    print(f"Minimum baseline-subtracted reference signal: {min_ref:.2f} (pg/mm²). "
-          f"Maximum signal: {np.max(np.abs(signal_bl)):.2f} (pg/mm²). "
-          f"Threshold for negative signal: {-((percent_threshold / 100.0) * np.max(np.abs(signal_bl))):.2f} pg/mm².")
     return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(signal_bl))), min_ref
 
 
