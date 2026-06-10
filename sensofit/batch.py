@@ -271,8 +271,9 @@ def sensorgram_heuristics(sample, blanks=None):
     return heuristics
 
 
-def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
-                   Rmax_min=0.5, sigma_max=10.0):
+def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
+                   Rmax_min=1.1, sigma_max=2.0,
+                   se_threshold=0.5, iqr_threshold=0.25):
     """Add a 'flag' column marking questionable fits.
 
     A fit is flagged if any of the following hold:
@@ -299,19 +300,39 @@ def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
 
     for _, row in df.iterrows():
         r = []
+        ka = row.get('ka')
+        ka_se = row.get('ka_se')
+        ka_iqr = row.get('ka_iqr')
+        kd = row.get('kd')
+        kd_se = row.get('kd_se')
+        kd_iqr = row.get('kd_iqr')
+        Rmax = row.get('Rmax')
+        Rmax_se = row.get('Rmax_se')
+        Rmax_iqr = row.get('Rmax_iqr')
+        sigma_res = row.get('sigma_res')
         if row.get('flag', False):
-            flags.append(row.get('flag', False))
-            reasons.append(row.get('flag_reason', ''))
-            continue  # Preserve existing flags and reasons
+            r.append(row.get('flag_reason', ''))  # Preserve existing flag reason
         if not row.get('success', False):
             r.append('fit_failed')
-        if pd.notna(row.get('kd')) and row['kd'] >= kd_max:
-            r.append('kd_at_bound')
-        if pd.notna(row.get('ka')) and row['ka'] <= ka_min:
+        if not np.isnan(ka) and ka <= ka_min:
             r.append('ka_at_bound')
-        if pd.notna(row.get('Rmax')) and row['Rmax'] <= Rmax_min:
+        if not np.isnan(ka_se) and ka_se > se_threshold * abs(ka):
+            r.append('ka_high_se')
+        if not np.isnan(ka_iqr) and ka_iqr > iqr_threshold * abs(ka):
+            r.append('ka_high_iqr')
+        if not np.isnan(kd) and kd >= kd_max:
+            r.append('kd_at_bound')
+        if not np.isnan(kd_se) and kd_se > se_threshold * abs(kd):
+            r.append('kd_high_se')
+        if not np.isnan(kd_iqr) and kd_iqr > iqr_threshold * abs(kd):
+            r.append('kd_high_iqr')
+        if not np.isnan(Rmax) and Rmax <= Rmax_min:
             r.append('low_Rmax')
-        if pd.notna(row.get('sigma_res')) and row['sigma_res'] > sigma_max:
+        if not np.isnan(Rmax_se) and Rmax_se > se_threshold * abs(Rmax):
+            r.append('Rmax_high_se')
+        if not np.isnan(Rmax_iqr) and Rmax_iqr > iqr_threshold * abs(Rmax):
+            r.append('Rmax_high_iqr')
+        if not np.isnan(sigma_res) and sigma_res > sigma_max:
             r.append('high_residual')
 
         flags.append(len(r) > 0)
