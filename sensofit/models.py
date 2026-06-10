@@ -404,8 +404,8 @@ def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.
     return error, (inj_signal.min(), inj_signal.max())
 
 
-def is_FC1_negative(sample: dict, threshold: float = -5.0):
-    """Detect negative signal in reference channel (FC1), 
+def is_reference_signal_negative(sample: dict, threshold: float = -5.0):
+    """Detect negative signal in reference channel, 
     which will affect signal interpretation.
     
     Parameters
@@ -413,7 +413,7 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     sample : dict
         Sample cycle from load_cxw().
     threshold : float
-        Threshold for the signal in the raw_reference channel (FC1) below which it is considered too negative. 
+        Threshold for the signal in the raw_reference channel below which it is considered too negative. 
         Default -5.0.
 
     Returns
@@ -426,9 +426,11 @@ def is_FC1_negative(sample: dict, threshold: float = -5.0):
     t = sample['time']
     bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
+    rinse_time = sample['markers'].get('Rinse', t[-1])
     bl_mask = t < inj_time
+    signal_mask = (t >= inj_time) & (t <= rinse_time)
     s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
-    ref_signal = sample['raw_reference'] - s_baseline
+    ref_signal = sample['raw_reference'][signal_mask] - s_baseline
     min_ref = ref_signal.min()
     return min_ref < threshold, min_ref
 
@@ -497,7 +499,7 @@ def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
-    reference surface (FC1) after rinse.  This is measured as a
+    reference surface after rinse.  This is measured as a
     positive baseline-subtracted raw_reference signal 2-5 s into
     the dissociation phase (after RI bulk has been rinsed away).
 

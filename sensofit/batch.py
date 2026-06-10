@@ -15,7 +15,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
-from .models import (is_baseline_noisy, has_injection_error, is_FC1_negative,
+from .models import (is_baseline_noisy, has_injection_error, is_reference_signal_negative,
                      is_sample_carried_over, is_not_a_binder, is_nonspecific_binder,
                      double_reference, select_blank)
 from .direct_kinetics import fit_sample as dk_fit_sample
@@ -123,9 +123,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
     if not ch_blanks:
         ch_blanks = blanks
 
-    # Check for non-specific binding before fitting
+    # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blanks=ch_blanks)
-    if len(heuristics) >= 2 or "injection_issue" in heuristics or "negative_signal_in_FC1" in heuristics or "no_binding" in heuristics:
+    if "negative_signal_in_reference" in heuristics:
         row = _fallback_row(sample, mode)
         row['flag'] = True
         row['flag_reason'] = '; '.join(heuristics)
@@ -256,9 +256,9 @@ def sensorgram_heuristics(sample, blanks=None):
     inj_error, _ = has_injection_error(sample, signal)
     if inj_error:
         heuristics.append('injection_issue')
-    neg_FC1, _ = is_FC1_negative(sample)
-    if neg_FC1:
-        heuristics.append('negative_signal_in_FC1')
+    neg_ref, _ = is_reference_signal_negative(sample)
+    if neg_ref:
+        heuristics.append('negative_signal_in_reference')
     no_bind, _ = is_not_a_binder(sample, blank=blank)
     if no_bind:
         heuristics.append('no_binding')
