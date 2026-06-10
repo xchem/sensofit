@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_error, is_reference_signal_negative,
-                     is_sample_carried_over, is_not_a_binder, is_nonspecific_binder,
+                     is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
                      double_reference, select_blank)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
@@ -125,7 +125,7 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
 
     # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blanks=ch_blanks)
-    if "negative_signal_in_reference" in heuristics:
+    if "negative_signal_in_reference_channel" in heuristics:
         row = _fallback_row(sample, mode)
         row['flag'] = True
         row['flag_reason'] = '; '.join(heuristics)
@@ -238,12 +238,12 @@ def _fallback_row(sample, mode):
 def sensorgram_heuristics(sample, blanks=None):
     """Heuristic to flag sensorgram to check if they should be fitted or not.
     Criteria:
-    - Noisy: baseline std > 5
-    - Injection issue: -10 > signal before injection > 10
-    - Negative signal in FC1: min signal < -5
-    - No binding: binding response < 5
-    - Sample carryover: steady-state signal > 10
-    - Non-specific binding: signal after rinse in reference channel > 2.5
+    - Noisy: baseline std > 5% of max abs(signal)
+    - Injection issue: -10% of max(abs(signal)) > signal before injection > 10% of max(abs(signal))
+    - Negative signal in reference channel: min signal < 1% of -max(abs(signal))
+    - Low signal-to-noise response: binding response < 5% of max(abs(signal))
+    - Sample carryover: steady-state signal > 10% of max(abs(signal))
+    - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(signal))
     """
     if blanks:
         blank = select_blank(sample['index'], blanks)
@@ -258,10 +258,10 @@ def sensorgram_heuristics(sample, blanks=None):
         heuristics.append('injection_issue')
     neg_ref, _ = is_reference_signal_negative(sample)
     if neg_ref:
-        heuristics.append('negative_signal_in_reference')
-    no_bind, _ = is_not_a_binder(sample, blank=blank)
-    if no_bind:
-        heuristics.append('no_binding')
+        heuristics.append('negative_signal_in_reference_channel')
+    low_snr, _ = has_low_signal_to_noise_reponse(sample, signal)
+    if low_snr:
+        heuristics.append('low_signal_to_noise_response')
     carryover, _ = is_sample_carried_over(sample, signal)
     if carryover:
         heuristics.append('sample_carryover')

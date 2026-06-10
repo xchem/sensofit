@@ -299,7 +299,7 @@ def double_reference(sample: dict, blank: dict):
 # Sensorgram heuristics and quality control.
 # ---------------------------------------------------------------------------
 
-def _get_binding_response(sample: dict, blank: dict = None):
+def _get_binding_response(sample: dict, signal: np.ndarray):
     """Calculate the binding response for a sample cycle. 
     The binding response is defined as the mean double-referenced signal 
     in the window 2 seconds before the Rinse marker.
@@ -312,8 +312,8 @@ def _get_binding_response(sample: dict, blank: dict = None):
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    blank : dict or None
-        Blank cycle for double referencing. If None, only baseline subtraction is applied.
+    signal : np.ndarray
+        Double-referenced (or baseline-subtracted) signal from the sample.
 
     Returns
     -------
@@ -322,22 +322,14 @@ def _get_binding_response(sample: dict, blank: dict = None):
         If an injection error is detected, returns 0.0.
     """
     t = sample['time']
-    signal = sample['signal']
     markers = sample['markers']
-    bl_time = markers.get('Baseline', t[0])
     inj_time = markers.get('Injection', t[0])
     rinse_time = markers.get('Rinse', t[-1])
-    if blank:
-        signal_bl, _ = double_reference(sample, blank)
-    else:
-        bl_mask = t < inj_time
-        s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
-        signal_bl = signal - s_baseline
 
     # check if there is a negative response after injection (t = inj_time -> t = inj_time + 5s)
     inj_mask = (t >= inj_time) & (t <= inj_time + 5)
-    inj_resp = signal_bl[inj_mask].mean()
-    if inj_resp < -1.0:
+    inj_resp = signal[inj_mask].mean()
+    if inj_resp <= -1.0:
         return 0.0
     
     # 2-5 s before rinse: RI bulk gone, only true binding remains
@@ -345,11 +337,11 @@ def _get_binding_response(sample: dict, blank: dict = None):
     if not resp_mask.any():
         return 0.0
 
-    bind_resp = float(signal_bl[resp_mask].mean())
+    bind_resp = float(signal[resp_mask].mean())
     return bind_resp
 
 
-def is_baseline_noisy(sample: dict, signal: np.ndarray, threshold: float = 5.0):
+def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0):
     """Detect noisy baseline in a sample cycle.
 
     Parameters
@@ -357,10 +349,10 @@ def is_baseline_noisy(sample: dict, signal: np.ndarray, threshold: float = 5.0):
     sample : dict
         Sample cycle from load_cxw().
     signal : np.ndarray
-        double-referenced signal from sample.
-    threshold : float
-        Threshold for the standard deviation of the double-referenced signal above which it is considered noisy. 
-        Default 5.0.
+        Double-referenced (or baseline-subtracted) signal from sample.
+    percent_threshold : float
+        Threshold for the standard deviation of the signal above which it is considered noisy. 
+        Default 5.0% of the maximum abs(signal) value.
 
     Returns
     -------
@@ -373,10 +365,10 @@ def is_baseline_noisy(sample: dict, signal: np.ndarray, threshold: float = 5.0):
     inj_time = sample['markers'].get('Injection', t[0])
     bl_mask = t < inj_time
     baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
-    return baseline_std > threshold, baseline_std
+    return baseline_std > (percent_threshold / 100.0) * np.max(np.abs(signal)), baseline_std
 
 
-def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.0):
+def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0):
     """Detect injection errors in a sample cycle.
 
     Parameters
@@ -384,10 +376,11 @@ def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.
     sample : dict
         Sample cycle from load_cxw().
     signal : np.ndarray
-        double-referenced signal from sample.
-    threshold : float
-        Threshold for the absolute value of the double-referenced signal before injection 
-        above which it is considered an injection error. Default 10.0.
+        Double-referenced (or baseline-subtracted) signal from sample.
+    percent_threshold : float
+        Threshold for the absolute value of the signal before injection 
+        above which it is considered an injection error. 
+        Default 10.0% of the maximum abs(signal) value.
 
     Returns
     -------
@@ -400,11 +393,12 @@ def has_injection_error(sample: dict, signal: np.ndarray, threshold: float = 10.
     inj_time = sample['markers'].get('Injection', t[0])
     inj_mask = (t > inj_time - 25) & (t <= inj_time)
     inj_signal = signal[inj_mask]
+    threshold = (percent_threshold / 100.0) * np.max(np.abs(signal))
     error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
     return error, (inj_signal.min(), inj_signal.max())
 
 
-def is_reference_signal_negative(sample: dict, threshold: float = -5.0):
+def is_reference_signal_negative(sample: dict, percent_threshold: float = 1.0):
     """Detect negative signal in reference channel, 
     which will affect signal interpretation.
     
@@ -412,9 +406,10 @@ def is_reference_signal_negative(sample: dict, threshold: float = -5.0):
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    threshold : float
-        Threshold for the signal in the raw_reference channel below which it is considered too negative. 
-        Default -5.0.
+    percent_threshold : float
+        Threshold for the baseline-subtracted signal in the raw_reference channel 
+        below which it is considered too negative. 
+        Default 1.0% of -abs(max(signal)).
 
     Returns
     -------
@@ -430,12 +425,16 @@ def is_reference_signal_negative(sample: dict, threshold: float = -5.0):
     bl_mask = t < inj_time
     signal_mask = (t >= inj_time) & (t <= rinse_time)
     s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
+    signal_bl = sample['signal'] - s_baseline
     ref_signal = sample['raw_reference'][signal_mask] - s_baseline
     min_ref = ref_signal.min()
-    return min_ref < threshold, min_ref
+    print(f"Minimum baseline-subtracted reference signal: {min_ref:.2f} (pg/mm²). "
+          f"Maximum signal: {np.max(np.abs(signal_bl)):.2f} (pg/mm²). "
+          f"Threshold for negative signal: {-((percent_threshold / 100.0) * np.max(np.abs(signal_bl))):.2f} pg/mm².")
+    return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(signal_bl))), min_ref
 
 
-def is_sample_carried_over(sample: dict, signal: np.ndarray, threshold: float = 5.0, time_window: float = 10.0):
+def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0, time_window: float = 10.0):
     """Detect sample carryover at the end of the cycle.
     Get the mean of the baseline-subtracted signal in the last 10 seconds of the cycle, 
     and if it is above the threshold, there is probably carryover.
@@ -445,10 +444,10 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, threshold: float = 
     sample : dict
         Sample cycle from load_cxw().
     signal : np.ndarray
-        double-referenced signal from sample.
-    threshold : float
-        Threshold for the baseline-subtracted signal at the end of the cycle above which there is probably carryover. 
-        Default 5.0.
+        Double-referenced (or baseline-subtracted) signal from sample.
+    percent_threshold : float
+        Threshold for the signal at the end of the cycle above which there is probably carryover. 
+        Default 5.0% of the maximum abs(signal) value.
     time_window : float
         The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. 
         Default 10.0.
@@ -464,38 +463,34 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, threshold: float = 
     rinseend_time = sample['markers'].get('RinseEnd', t[-1])
     ss_mask = (t >= rinseend_time - time_window) & (t <= rinseend_time) # last time_window seconds of the cycle
     end_signal = signal[ss_mask].mean()
-    return end_signal > threshold, end_signal
+    return end_signal > ((percent_threshold / 100.0) * np.max(np.abs(signal))), end_signal
 
 
-def is_not_a_binder(sample: dict, blank: dict, threshold: float = 5.0):
-    """Detect non-binders from the primary sensorgram.
-
-    Non-binders show minimal binding response before rinse, e.g. a flat
-    line or pure noise.  This is measured as a low double-referenced
-    signal in the window 2 s before rinse.
+def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0):
+    """Detect low signal-to-noise response in sensorgram.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    blank : dict
-        Blank cycle for baseline subtraction.
-    threshold : float
-        Threshold for the double-referenced signal below which the sample is classified as a non-binder. 
-        Default 5.0.
+    signal : np.ndarray
+        Double-referenced (or baseline-subtracted) signal from sample.
+    percent_threshold : float
+        Threshold for the signal below which the response is considered as low signal to noise ratio. 
+        Default 5.0% of the maximum abs(signal) value.
 
     Returns
     -------
-    not_binder : bool
-        True if the sample is classified as a non-binder.
+    low_snr : bool
+        True if the sample has low signal-to-noise response.
     bind_resp : float
         Binding response (pg/mm²), used for assessment.
     """
-    bind_resp = _get_binding_response(sample, blank)
-    return bind_resp <= threshold, bind_resp
+    bind_resp = _get_binding_response(sample, signal)
+    return bind_resp <= ((percent_threshold / 100.0) * np.max(np.abs(signal))), bind_resp
 
 
-def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
+def is_nonspecific_binder(sample: dict, percent_threshold: float = 5.0):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
@@ -507,9 +502,10 @@ def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    threshold : float
-        Reference dissociation signal (pg/mm²) above which the sample
-        is classified as a non-specific binder.  Default 2.5.
+    percent_threshold : float
+        Threshold for the baseline-subtracted signal in the raw_reference channel 
+        above which the sample is classified as a non-specific binder.  
+        Default 5.0% of the maximum abs(signal) value.
 
     Returns
     -------
@@ -533,7 +529,7 @@ def is_nonspecific_binder(sample: dict, threshold: float = 2.5):
         return False, 0.0
 
     ref_dissoc = float((ref[diss_mask] - ref_bl).mean())
-    return ref_dissoc > threshold, ref_dissoc
+    return ref_dissoc > ((percent_threshold / 100.0) * np.max(np.abs(ref - ref_bl))), ref_dissoc
 
 
 # ---------------------------------------------------------------------------
