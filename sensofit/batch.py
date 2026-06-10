@@ -314,25 +314,25 @@ def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
             r.append(row.get('flag_reason', ''))  # Preserve existing flag reason
         if not row.get('success', False):
             r.append('fit_failed')
-        if not np.isnan(ka) and ka <= ka_min:
+        if pd.notna(ka) and ka <= ka_min:
             r.append('ka_at_bound')
-        if not np.isnan(ka_se) and ka_se > se_threshold * abs(ka):
+        if pd.notna(ka_se) and ka_se > se_threshold * abs(ka):
             r.append('ka_high_se')
-        if not np.isnan(ka_iqr) and ka_iqr > iqr_threshold * abs(ka):
+        if pd.notna(ka_iqr) and ka_iqr > iqr_threshold * abs(ka):
             r.append('ka_high_iqr')
-        if not np.isnan(kd) and kd >= kd_max:
+        if pd.notna(kd) and kd >= kd_max:
             r.append('kd_at_bound')
-        if not np.isnan(kd_se) and kd_se > se_threshold * abs(kd):
+        if pd.notna(kd_se) and kd_se > se_threshold * abs(kd):
             r.append('kd_high_se')
-        if not np.isnan(kd_iqr) and kd_iqr > iqr_threshold * abs(kd):
+        if pd.notna(kd_iqr) and kd_iqr > iqr_threshold * abs(kd):
             r.append('kd_high_iqr')
-        if not np.isnan(Rmax) and Rmax <= Rmax_min:
+        if pd.notna(Rmax) and Rmax <= Rmax_min:
             r.append('low_Rmax')
-        if not np.isnan(Rmax_se) and Rmax_se > se_threshold * abs(Rmax):
+        if pd.notna(Rmax_se) and Rmax_se > se_threshold * abs(Rmax):
             r.append('Rmax_high_se')
-        if not np.isnan(Rmax_iqr) and Rmax_iqr > iqr_threshold * abs(Rmax):
+        if pd.notna(Rmax_iqr) and Rmax_iqr > iqr_threshold * abs(Rmax):
             r.append('Rmax_high_iqr')
-        if not np.isnan(sigma_res) and sigma_res > sigma_max:
+        if pd.notna(sigma_res) and sigma_res > sigma_max:
             r.append('high_residual')
 
         flags.append(len(r) > 0)
