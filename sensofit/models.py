@@ -425,10 +425,9 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 1.0):
     bl_mask = t < inj_time
     signal_mask = (t >= inj_time) & (t <= rinse_time)
     s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
-    signal_bl = sample['signal'] - s_baseline
-    ref_signal = sample['raw_reference'][signal_mask] - s_baseline
-    min_ref = ref_signal.min()
-    return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(signal_bl))), min_ref
+    ref_signal = sample['raw_reference'] - s_baseline
+    min_ref = ref_signal[signal_mask].min()
+    return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(ref_signal))), min_ref
 
 
 def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0, time_window: float = 10.0):
