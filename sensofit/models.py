@@ -368,7 +368,7 @@ def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float
     return baseline_std > (percent_threshold / 100.0) * np.max(np.abs(signal)), baseline_std
 
 
-def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0):
+def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0, time_window: float = 25.0):
     """Detect injection errors in a sample cycle.
 
     Parameters
@@ -391,11 +391,11 @@ def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: flo
     """
     t = sample['time']
     inj_time = sample['markers'].get('Injection', t[0])
-    inj_mask = (t > inj_time - 25) & (t <= inj_time)
+    inj_mask = (t > inj_time - time_window) & (t <= inj_time)
     inj_signal = signal[inj_mask]
     threshold = (percent_threshold / 100.0) * np.max(np.abs(signal))
     error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
-    return error, (inj_signal.min(), inj_signal.max())
+    return error, (inj_signal.min() if inj_mask.any() else signal.min(), inj_signal.max() if inj_mask.any() else signal.max())
 
 
 def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
@@ -426,7 +426,7 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
     signal_mask = (t >= inj_time) & (t <= rinse_time)
     s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
     ref_signal = sample['raw_reference'] - s_baseline
-    min_ref = ref_signal[signal_mask].min()
+    min_ref = ref_signal[signal_mask].min() if signal_mask.any() else ref_signal.min()
     return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(ref_signal))), min_ref
 
 
@@ -458,7 +458,7 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: 
     t = sample['time']
     rinseend_time = sample['markers'].get('RinseEnd', t[-1])
     ss_mask = (t >= rinseend_time - time_window) & (t <= rinseend_time) # last time_window seconds of the cycle
-    end_signal = signal[ss_mask].mean()
+    end_signal = signal[ss_mask].mean() if ss_mask.any() else signal[-1]
     return end_signal > ((percent_threshold / 100.0) * np.max(np.abs(signal))), end_signal
 
 
