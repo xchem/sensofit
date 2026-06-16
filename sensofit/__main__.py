@@ -28,6 +28,8 @@ import pandas as pd
 from .batch import batch_fit, flag_poor_fits
 from .plotting import save_fit_plots
 from .dataexporter import export_package
+from .package_loader import load_experiment
+from .models import select_blank, _get_binding_response, fit_last_disso
 
 
 def _find_cxw_files(path):
@@ -173,6 +175,67 @@ def _run_protocol_dev(argv):
     print('This is a placeholder for protocol development code.')
 
 
+def _run_last_disso_fit(argv):
+    parser = argparse.ArgumentParser(
+        prog='sensofit last-disso',
+        description='Fit last dissociation only',
+    )
+    parser.add_argument('paths', nargs='+',
+                        help='One or more .cxw files or directories.')
+    parser.add_argument('--output', '-o', default='last_disso_results',
+                        help='Output directory for CSV. Default: last_disso_results/')
+    args = parser.parse_args(argv)
+
+    cxw_files = _expand_cxw_inputs(args.paths)
+    if not cxw_files:
+        print('No .cxw files found.', file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(args.output, exist_ok=True)
+
+    for f in cxw_files:
+        print(f'Fitting last dissociation of measurements in {os.path.basename(f)}...')
+        results = {
+                "compound": [],
+                "cycle": [],
+                "channel": [],
+                "koff_active": [],
+                "koff_active_error": [],
+                "koff_reference": [],
+                "koff_ref_error": [],
+                "koff_ratio_active/ref": [],
+                "binding_response": [],
+            }
+        data = load_experiment(f)
+        samples = data["samples"]
+        blanks = data["blanks"]
+        for s in samples:
+            try:
+                ch_blanks = [b for b in blanks if b["channel"] == s["channel"]]
+                blank = select_blank(s["index"], ch_blanks)
+                bind_response = _get_binding_response(s, blank)
+                koff_active, active_error = fit_last_disso(s, channel="raw_active")
+                koff_ref, ref_error = fit_last_disso(s, channel="raw_reference")
+                # print(f"k_off (active channel): {koff_active}\n"
+                #       f"k_off (reference channel): {koff_ref}\n"
+                #       f"Binding response: {bind_response}")
+                results["compound"].append(s.get("compound"))
+                results["cycle"].append(s.get("index"))
+                results["channel"].append(s.get("channel"))
+                results["koff_active"].append(koff_active)
+                results["koff_active_error"].append(active_error)
+                results["koff_reference"].append(koff_ref)
+                results["koff_ref_error"].append(ref_error)
+                results["koff_ratio_active/ref"].append(koff_active/koff_ref if koff_ref != 0 else np.inf)
+                results["binding_response"].append(bind_response)
+            except Exception as e:
+                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s["channel"]}):\n"
+                      f"{e}")
+                continue
+        filepath = args.output+"/"+str(os.path.basename(f)).replace(".cxw", "_check.csv")
+        pd.DataFrame(results).to_csv(filepath, index=False)
+        print(f'Wrote CSV: {filepath}')
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -181,6 +244,9 @@ def main(argv=None):
         return
     if argv and argv[0] == 'protocol-dev':
         _run_protocol_dev(argv[1:])
+        return
+    if argv and argv[0] == 'last-disso':
+        _run_last_disso_fit(argv[1:])
         return
 
     parser = argparse.ArgumentParser(
