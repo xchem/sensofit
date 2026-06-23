@@ -37,7 +37,7 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         fig, ax = plt.subplots(figsize=(8, 5))
 
     # Data trace
-    ax.plot(t, signal, color='black', linewidth=0.8, label='Data')
+    ax.plot(t, signal, color='black', linewidth=0.8, label='Sensorgram')
 
     # Model fit trace
     R_fit = result.get('R_fit')
@@ -62,14 +62,14 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
     ax.set_title(title, fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Response (pg/mm²)')
-    ax.legend(loc='upper right', fontsize=8)
+    ax.legend(loc='upper right', fontsize=10)
 
     # Info box with kinetic parameters
     ka = result.get('ka', np.nan)
     kd = result.get('kd', np.nan)
     KD = result.get('KD', np.nan)
     Rmax = result.get('Rmax', np.nan)
-    sigma = result.get('sigma_residual', np.nan)
+    sqrt_chi2 = result.get('sqrt_chi2', np.nan)
 
     info_lines = [
         f'ka  = {ka:.3e} M⁻¹s⁻¹',
@@ -77,12 +77,12 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         f'KD  = {KD:.3e} M',
         f'Rmax = {Rmax:.2f} pg/mm²',
     ]
-    if np.isfinite(sigma):
-        info_lines.append(f'σ_res = {sigma:.3f}')
+    if np.isfinite(sqrt_chi2):
+        info_lines.append(f'sqrt(chi2) = {sqrt_chi2:.3f}')
 
     info_text = '\n'.join(info_lines)
     ax.text(0.02, 0.98, info_text,
-            transform=ax.transAxes, fontsize=8,
+            transform=ax.transAxes, fontsize=10,
             verticalalignment='top',
             fontfamily='monospace',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat',

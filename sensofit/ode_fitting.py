@@ -166,11 +166,10 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     if not fits:
         # Fallback: use derived estimates
         R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func, R0=0.0)
-        sqrt_chi2 = _chi2(R_sim=R_fit, n_params=len([ka_est, kd_final, Rmax_est]), w=w, sqrt=True)
         return {
             'ka': ka_est, 'kd': kd_final, 'Rmax': Rmax_est,
             'KD': kd_final / ka_est,
-            'sqrt_chi2': sqrt_chi2,
+            'sqrt_chi2': np.nan,
             'R0': R0_est, 'Rss': Rss_est,
             'ka_se': np.nan, 'kd_se': np.nan, 'Rmax_se': np.nan,
             'cov': np.full((3, 3), np.nan),

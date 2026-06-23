@@ -15,8 +15,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
-from .models import (is_baseline_noisy, has_injection_error, is_FC1_negative,
-                     is_sample_carried_over, is_not_a_binder, is_nonspecific_binder,
+from .models import (is_baseline_noisy, has_injection_error, is_reference_signal_negative,
+                     is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
                      double_reference, select_blank)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
@@ -123,9 +123,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
     if not ch_blanks:
         ch_blanks = blanks
 
-    # Check for non-specific binding before fitting
+    # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blanks=ch_blanks)
-    if len(heuristics) >= 2 or "injection_issue" in heuristics or "negative_signal_in_FC1" in heuristics or "no_binding" in heuristics:
+    if "negative_signal_in_reference_channel" in heuristics:
         row = _fallback_row(sample, mode)
         row['flag'] = True
         row['flag_reason'] = '; '.join(heuristics)
@@ -238,12 +238,12 @@ def _fallback_row(sample, mode):
 def sensorgram_heuristics(sample, blanks=None):
     """Heuristic to flag sensorgram to check if they should be fitted or not.
     Criteria:
-    - Noisy: baseline std > 5
-    - Injection issue: -10 > signal before injection > 10
-    - Negative signal in FC1: min signal < -5
-    - No binding: binding response < 5
-    - Sample carryover: steady-state signal > 10
-    - Non-specific binding: signal after rinse in reference channel > 2.5
+    - Noisy: baseline std > 5% of max abs(signal)
+    - Injection issue: -10% of max(abs(signal)) > signal before injection > 10% of max(abs(signal))
+    - Negative signal in reference channel: min signal < 5% of -max(abs(reference signal))
+    - Low signal-to-noise response: binding response < 5% of max(abs(signal))
+    - Sample carryover: steady-state signal > 10% of max(abs(signal))
+    - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(reference signal))
     """
     if blanks:
         blank = select_blank(sample['index'], blanks)
@@ -256,12 +256,12 @@ def sensorgram_heuristics(sample, blanks=None):
     inj_error, _ = has_injection_error(sample, signal)
     if inj_error:
         heuristics.append('injection_issue')
-    neg_FC1, _ = is_FC1_negative(sample)
-    if neg_FC1:
-        heuristics.append('negative_signal_in_FC1')
-    no_bind, _ = is_not_a_binder(sample, blank=blank)
-    if no_bind:
-        heuristics.append('no_binding')
+    neg_ref, _ = is_reference_signal_negative(sample)
+    if neg_ref:
+        heuristics.append('negative_signal_in_reference_channel')
+    low_snr, _ = has_low_signal_to_noise_reponse(sample, signal)
+    if low_snr:
+        heuristics.append('low_signal_to_noise_response')
     carryover, _ = is_sample_carried_over(sample, signal)
     if carryover:
         heuristics.append('sample_carryover')
@@ -271,8 +271,9 @@ def sensorgram_heuristics(sample, blanks=None):
     return heuristics
 
 
-def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
-                   Rmax_min=0.5, sigma_max=10.0):
+def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
+                   Rmax_min=1.1, sigma_max=2.0,
+                   se_threshold=0.5, iqr_threshold=0.25):
     """Add a 'flag' column marking questionable fits.
 
     A fit is flagged if any of the following hold:
@@ -299,19 +300,39 @@ def flag_poor_fits(df, kd_max=10.0, ka_min=1.0,
 
     for _, row in df.iterrows():
         r = []
+        ka = row.get('ka')
+        ka_se = row.get('ka_se')
+        ka_iqr = row.get('ka_iqr')
+        kd = row.get('kd')
+        kd_se = row.get('kd_se')
+        kd_iqr = row.get('kd_iqr')
+        Rmax = row.get('Rmax')
+        Rmax_se = row.get('Rmax_se')
+        Rmax_iqr = row.get('Rmax_iqr')
+        sigma_res = row.get('sigma_res')
         if row.get('flag', False):
-            flags.append(row.get('flag', False))
-            reasons.append(row.get('flag_reason', ''))
-            continue  # Preserve existing flags and reasons
+            r.append(row.get('flag_reason', ''))  # Preserve existing flag reason
         if not row.get('success', False):
             r.append('fit_failed')
-        if pd.notna(row.get('kd')) and row['kd'] >= kd_max:
-            r.append('kd_at_bound')
-        if pd.notna(row.get('ka')) and row['ka'] <= ka_min:
+        if pd.notna(ka) and ka <= ka_min:
             r.append('ka_at_bound')
-        if pd.notna(row.get('Rmax')) and row['Rmax'] <= Rmax_min:
+        if pd.notna(ka_se) and ka_se > se_threshold * abs(ka):
+            r.append('ka_high_se')
+        if pd.notna(ka_iqr) and ka_iqr > iqr_threshold * abs(ka):
+            r.append('ka_high_iqr')
+        if pd.notna(kd) and kd >= kd_max:
+            r.append('kd_at_bound')
+        if pd.notna(kd_se) and kd_se > se_threshold * abs(kd):
+            r.append('kd_high_se')
+        if pd.notna(kd_iqr) and kd_iqr > iqr_threshold * abs(kd):
+            r.append('kd_high_iqr')
+        if pd.notna(Rmax) and Rmax <= Rmax_min:
             r.append('low_Rmax')
-        if pd.notna(row.get('sigma_res')) and row['sigma_res'] > sigma_max:
+        if pd.notna(Rmax_se) and Rmax_se > se_threshold * abs(Rmax):
+            r.append('Rmax_high_se')
+        if pd.notna(Rmax_iqr) and Rmax_iqr > iqr_threshold * abs(Rmax):
+            r.append('Rmax_high_iqr')
+        if pd.notna(sigma_res) and sigma_res > sigma_max:
             r.append('high_residual')
 
         flags.append(len(r) > 0)
