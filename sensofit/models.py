@@ -260,14 +260,13 @@ def double_reference(sample: dict, blank: dict):
         Index of the blank used, or None if fallback (no blank subtraction).
     """
     t = sample['time']
-    bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
     rinse_time = sample['markers'].get('Rinse', t[-1])
     n = len(t)
 
     # Baseline-subtract sample
     bl_mask = t < inj_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][np.isclose(t, bl_time)][0]
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][0]
     s_bl = sample['signal'] - s_baseline
 
     if blank:
@@ -275,7 +274,7 @@ def double_reference(sample: dict, blank: dict):
         n_b = len(blank['signal'])
         n_min = min(n, n_b)
         bl_mask_b = t[:n_min] < inj_time
-        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min][np.isclose(t, bl_time)][0]
+        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min][0]
         b_bl = blank['signal'][:n_min] - b_baseline
         corrected_short = s_bl[:n_min] - b_bl
 
@@ -419,12 +418,11 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
         Minimum value of the raw_reference signal, used for assessment.
     """
     t = sample['time']
-    bl_time = sample['markers'].get('Baseline', t[0])
     inj_time = sample['markers'].get('Injection', t[0])
     rinse_time = sample['markers'].get('Rinse', t[-1])
     bl_mask = t < inj_time
     signal_mask = (t >= inj_time) & (t <= rinse_time)
-    s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][np.isclose(t, bl_time)][0]
+    s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][0]
     ref_signal = sample['raw_reference'] - s_baseline
     min_ref = ref_signal[signal_mask].min() if signal_mask.any() else ref_signal.min()
     return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(ref_signal))), min_ref
@@ -462,7 +460,7 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: 
     return end_signal > ((percent_threshold / 100.0) * np.max(np.abs(signal))), end_signal
 
 
-def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0):
+def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_threshold: float = 5.0):
     """Detect low signal-to-noise response in sensorgram.
 
     Parameters
@@ -471,19 +469,25 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, percent_th
         Sample cycle from load_cxw().
     signal : np.ndarray
         Double-referenced (or baseline-subtracted) signal from sample.
-    percent_threshold : float
-        Threshold for the signal below which the response is considered as low signal to noise ratio. 
-        Default 5.0% of the maximum abs(signal) value.
+    snr_threshold: float
+        Threshold of the signal to noise ratio between the binding response 
+        and the noise (`snr = bind_resp/noise`).
+        Default 5.0.
 
     Returns
     -------
     low_snr : bool
-        True if the sample has low signal-to-noise response.
+        True if the sample has a signal-to-noise ratio lower 
+        than the threshold.
     bind_resp : float
         Binding response (pg/mm²), used for assessment.
     """
+    t = sample['time']
+    inj_time = sample['markers'].get('Injection', t[0])
+    bl_mask = t < inj_time
+    baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
     bind_resp = _get_binding_response(sample, signal)
-    return bind_resp <= ((percent_threshold / 100.0) * np.max(np.abs(signal))), bind_resp
+    return (bind_resp/baseline_std) <= snr_threshold if baseline_std != 0.0 else False, bind_resp
 
 
 def is_nonspecific_binder(sample: dict, percent_threshold: float = 5.0):
