@@ -19,6 +19,7 @@ dependencies = [
     "seaborn",
     "joblib",
     "kivy",
+    "openpyxl",
 ]
 
 [tool.setuptools.packages.find]

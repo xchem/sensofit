@@ -775,7 +775,15 @@ def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict =
             signal, _ = double_reference(sample, blank)
     signal = signal[disso_mask]
     R0 = signal[0]
-    popt, pcov = curve_fit(_disso_rate_equation, xdata=t, ydata=signal, p0=[1, R0, t0])
+    try:
+        popt, pcov = curve_fit(_disso_rate_equation, xdata=t, ydata=signal, p0=[1, R0, t0])
+    except Exception as e:
+        print(f"Warning! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample[channel]}).\n"
+              f"Error: {e}")
+        if debug:
+            return t, signal, [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+        else:
+            return  [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
     perr = np.sqrt(np.diag(pcov))
     if debug:
         return t, signal, popt, pcov, perr
