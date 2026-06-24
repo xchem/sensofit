@@ -760,25 +760,26 @@ def _disso_rate_equation(t, koff, R0, t0):
     return R0 * np.exp(-koff * (t-t0))
     
 
-def fit_last_disso(sample: dict = {}, channel: str = "raw_active", debug=False):
+def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict = None, debug=False):
     t = sample["time"]
+    t_inj = sample["markers"].get("Injection")
     t_rinse = sample["markers"].get("Rinse")
-    t_rinseend = sample["markers"].get("RinseEnd")
+    bl_mask = t < t_inj
     disso_mask = t > t_rinse
-    ss_mask = t >= (t_rinseend - 30)
     t = t[disso_mask]
     t0 = t[0]
-    signal = sample[channel] - sample[channel][ss_mask].mean()
+    if channel != "signal":
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][0]
+    else:
+        if blank is not None:
+            signal, _ = double_reference(sample, blank)
     signal = signal[disso_mask]
     R0 = signal[0]
     popt, pcov = curve_fit(_disso_rate_equation, xdata=t, ydata=signal, p0=[1, R0, t0])
     perr = np.sqrt(np.diag(pcov))
-    # print(f"Original parameters:\nR0: {R0} | t0: {t0}\n"
-    #       f"Optimal parameters:\nkoff: {popt[0]} | R0: {popt[1]} | t0: {popt[2]}\n"
-    #       f"Covariances: {pcov[0]} | {pcov[1]} | {pcov[2]}")
     if debug:
         return t, signal, popt, pcov, perr
-    return popt[0], perr[0]
+    return popt, perr
 
 
 # ---------------------------------------------------------------------------
