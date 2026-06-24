@@ -62,6 +62,10 @@ def _find_cxw_files(path):
     sys.exit(1)
 
 
+def _run_gui():
+    from .gui import SensoFitApp
+    SensoFitApp().run()
+
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_jobs=None):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
@@ -239,6 +243,9 @@ def _run_last_disso_fit(argv):
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == 'gui':
+        _run_gui()
+        return
     if argv and argv[0] == 'export':
         _run_export(argv[1:])
         return
