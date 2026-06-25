@@ -18,6 +18,8 @@ dependencies = [
     "jupyterlab",
     "seaborn",
     "joblib",
+    "kivy",
+    "openpyxl",
 ]
 
 [tool.setuptools.packages.find]

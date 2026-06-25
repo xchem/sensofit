@@ -16,7 +16,7 @@ import numpy as np
 from scipy.interpolate import UnivariateSpline
 from scipy.integrate import solve_ivp
 from scipy.signal import savgol_filter
-
+from scipy.optimize import curve_fit
 
 # ---------------------------------------------------------------------------
 # Concentration profile from DMSO calibration
@@ -748,6 +748,44 @@ def trim_to_fit_window(t, signal, w, markers, pre_s=0.5, post_s=2.0):
     t_end = rinse_end + post_s
     fit_mask = (t >= t_start) & (t <= t_end)
     return t[fit_mask], signal[fit_mask], w[fit_mask], fit_mask
+
+
+# ---------------------------------------------------------------------------
+# Last dissociation fit
+# ---------------------------------------------------------------------------
+
+def _disso_rate_equation(t, koff, R0, t0):
+    return R0 * np.exp(-koff * (t-t0))
+    
+
+def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict = None, debug=False):
+    t = sample["time"]
+    t_inj = sample["markers"].get("Injection")
+    t_rinse = sample["markers"].get("Rinse")
+    bl_mask = t < t_inj
+    disso_mask = t > t_rinse
+    t = t[disso_mask]
+    t0 = t[0]
+    if channel != "signal":
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][0]
+    else:
+        if blank is not None:
+            signal, _ = double_reference(sample, blank)
+    signal = signal[disso_mask]
+    R0 = signal[0]
+    try:
+        popt, pcov = curve_fit(_disso_rate_equation, xdata=t, ydata=signal, p0=[1, R0, t0])
+    except Exception as e:
+        print(f"Warning! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample[channel]}).\n"
+              f"Error: {e}")
+        if debug:
+            return t, signal, [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+        else:
+            return  [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+    perr = np.sqrt(np.diag(pcov))
+    if debug:
+        return t, signal, popt, pcov, perr
+    return popt, perr
 
 
 # ---------------------------------------------------------------------------
