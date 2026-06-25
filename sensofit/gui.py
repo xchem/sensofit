@@ -185,16 +185,16 @@ class CheckSensorgramsScreen(Screen):
         container = BoxLayout(orientation='horizontal', spacing=12, padding=12)
 
         # Left and right handside layouts
-        left_panel = BoxLayout(orientation='vertical', size_hint_x=0.72, spacing=8)
-        right_panel = BoxLayout(orientation='vertical', size_hint_x=0.28, spacing=8)
+        left_panel = BoxLayout(orientation='vertical', size_hint_x=0.7, spacing=8)
+        right_panel = BoxLayout(orientation='vertical', size_hint_x=0.3, spacing=8)
 
         ### LEFT HAND SIDE (LHS)
         # LHS - Top: Import files layouts
         control_bar = BoxLayout(orientation='vertical', size_hint_y=None, height=88, spacing=8)
         
         # First row --> import file, activate processing
-        first_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=40, spacing=8)
-        browse_button = Button(text='Browse .cxw or .zip file', size_hint_x=None, width=180)
+        first_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=50, spacing=8)
+        browse_button = Button(text=f'Browse .cxw\nor .zip file', size_hint_x=None, width=180, halign="center")
         browse_button.bind(on_release=self.open_file_browser)
         self.process_button = Button(text='Process file', size_hint_x=None, width=180, disabled=True)
         self.process_button.bind(on_release=self.start_processing)
@@ -245,14 +245,14 @@ class CheckSensorgramsScreen(Screen):
         flags_container = BoxLayout(orientation='vertical', size_hint_x=0.3, spacing=6)
         good_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
         self.good_checkbox = CheckBox(size_hint_x=None, width=24)
-        good_label = Label(text='Good', size_hint_x=None, width=40, halign='left', valign='middle')
+        good_label = Label(text='Good', size_hint_x=None, width=80, halign='left', valign='middle')
         good_label.bind(size=good_label.setter('text_size'))
         good_row.add_widget(self.good_checkbox)
         good_row.add_widget(good_label)
         
         bad_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
         self.bad_checkbox = CheckBox(size_hint_x=None, width=24)
-        bad_label = Label(text='Bad', size_hint_x=None, width=40, halign='left', valign='middle')
+        bad_label = Label(text='Bad', size_hint_x=None, width=80, halign='left', valign='middle')
         bad_label.bind(size=bad_label.setter('text_size'))
         bad_row.add_widget(self.bad_checkbox)
         bad_row.add_widget(bad_label)
@@ -282,12 +282,12 @@ class CheckSensorgramsScreen(Screen):
         
         # LHS - Bottom: navigation buttons (Previous/Next)
         nav_container = BoxLayout(orientation='horizontal', size_hint_y=None, height=40, spacing=8)
-        prev_button = Button(text='<-- Previous', size_hint_x=0.5)
-        prev_button.bind(on_release=self.on_prev_cycle)
-        next_button = Button(text='Next -->', size_hint_x=0.5)
-        next_button.bind(on_release=self.on_next_cycle)
-        nav_container.add_widget(prev_button)
-        nav_container.add_widget(next_button)
+        self.prev_button = Button(text='<-- Previous', size_hint_x=0.5, disabled=True)
+        self.prev_button.bind(on_release=self.on_prev_cycle)
+        self.next_button = Button(text='Next -->', size_hint_x=0.5, disabled=True)
+        self.next_button.bind(on_release=self.on_next_cycle)
+        nav_container.add_widget(self.prev_button)
+        nav_container.add_widget(self.next_button)
 
         left_panel.add_widget(control_bar)
         left_panel.add_widget(self.selected_file_label)
@@ -313,13 +313,13 @@ class CheckSensorgramsScreen(Screen):
         # RHS - Top: sort cycles
         sort_bar = BoxLayout(orientation='vertical', size_hint_y=None, height=80, spacing=4)
         top_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=44, spacing=8)
-        sort_label = Label(text='Sort by:', size_hint_x=None, width=55, halign='left', valign='middle')
+        sort_label = Label(text='Sort by:', size_hint_x=0.25, halign='left', valign='middle')
         sort_label.bind(size=sort_label.setter('text_size'))
-        self.sort_field_spinner = Spinner(text='', values=('cycle type', 'koff (active)', 'bind. response'), size_hint_x=0.45)
+        self.sort_field_spinner = Spinner(text='default', values=('default', 'cycle type', 'koff (active)', 'bind. response'), size_hint_x=0.375)
         # Descending tick box (default = ascending)
-        desc_box = BoxLayout(orientation='horizontal', size_hint_x=0.55, spacing=2)
-        self.desc_checkbox = CheckBox(active=False, size_hint_x=None, width=24)
-        desc_label = Label(text='Descending', size_hint_x=1, halign='left', valign='middle')
+        desc_box = BoxLayout(orientation='horizontal', size_hint_x=0.375, spacing=2)
+        self.desc_checkbox = CheckBox(active=False, size_hint_x=0.25, center_y=True)
+        desc_label = Label(text='Descending', size_hint_x=0.75, halign='left', valign='middle')
         desc_label.bind(size=desc_label.setter('text_size'))
         desc_box.add_widget(self.desc_checkbox)
         desc_box.add_widget(desc_label)
@@ -408,6 +408,8 @@ class CheckSensorgramsScreen(Screen):
         self.comment_input.text = ''
         self.import_button.disabled = True
         self.filter_button.disabled = True
+        self.prev_button.disabled = True
+        self.next_button.disabled = True
         self.export_button.disabled = True
 
     def start_processing(self, _):
@@ -474,11 +476,16 @@ class CheckSensorgramsScreen(Screen):
         channel = sample_bl.get('channel', 'n/a')
         label = f'{compound} (cycle {cycle_id} - channel {channel})'
 
+        fig1_data = self._get_fig1_data(sample_bl, blank, popt_act, popt_ref)
+        fig2_data = self._get_fig2_data(sample_bl, popt_senso)
+
         self.samples_info.append({
             'label': label,
             'compound': compound,
             'cycle_id': cycle_id,
             'channel': channel,
+            'fig1_data': fig1_data,
+            'fig2_data': fig2_data,
             'koff_active': float(popt_act[0]),
             'koff_active_error': float(perr_act[0]),
             'koff_reference': float(popt_ref[0]),
@@ -518,6 +525,8 @@ class CheckSensorgramsScreen(Screen):
             # Enable import, filter, and export button
             self.import_button.disabled = False
             self.filter_button.disabled = False
+            self.prev_button.disabled = False
+            self.next_button.disabled = False
             self.export_button.disabled = False
         else:
             self._reset_after_error('No valid sample cycles available')
@@ -788,7 +797,7 @@ class CheckSensorgramsScreen(Screen):
         
         if ext.lower() == 'csv':
             df.to_csv(filepath, index=False)
-        elif ext.lower() == 'xls':
+        elif ext.lower() == 'xlsx':
             df.to_excel(filepath, index=False)
         else:
             raise ValueError(f'Unsupported format: {ext}')
@@ -797,36 +806,66 @@ class CheckSensorgramsScreen(Screen):
     def update_plots(self):
         if not self.selected_item:
             return
-        self.plot_image_1.texture = self.make_plot_texture(self.make_first_figure(self.selected_item))
-        self.plot_image_2.texture = self.make_plot_texture(self.make_second_figure(self.selected_item))
+        fig1_data = self.selected_item['fig1_data']
+        fig2_data = self.selected_item['fig2_data']
+        koff_act = self.selected_item['koff_active']
+        koff_ref = self.selected_item['koff_reference']
+        koff_senso = self.selected_item['koff_sensorgram']
+        bind_resp = self.selected_item['binding_response']
+        label = self.selected_item['label']
+        self.plot_image_1.texture = self.make_plot_texture(self.make_first_figure(fig1_data, koff_act, koff_ref, label))
+        self.plot_image_2.texture = self.make_plot_texture(self.make_second_figure(fig2_data, koff_senso, bind_resp, label))
 
-    def make_first_figure(self, item):
-        sample = item['sample']
+    def _get_fig1_data(self, sample, blank, popt_act, popt_ref):
+        data = {'blank_time': None, 'blank_signal': None}
         t = sample['time']
+        data['sample_time'] = t
         t_rinse = sample['markers'].get('Rinse')
         disso_mask = t > t_rinse
-        blank = item['blank']
-
-        fig, ax = plt.subplots(figsize=(12, 4))
-        ax.plot(t, sample['raw_active_bl'], color='red', linewidth=1.5, label='Active (baseline-subtracted)')
-        ax.plot(t, sample['raw_reference_bl'], color='blue', linewidth=1.5, label='Reference (baseline-subtracted)')
-
-        koff, R0, t0  = item['popt_active']
-        active_fit = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        ax.plot(t[disso_mask], active_fit, color='orange', linestyle='--', linewidth=1.2, label=f'Disso. fit (active)\nkoff = {koff:.2f}')
-
-        koff, R0, t0 = item['popt_reference']
-        ref_fit = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        ax.plot(t[disso_mask], ref_fit, color='cyan', linestyle='--', linewidth=1.2, label=f'Disso. fit (reference)\nkoff = {koff:.2f}')
+        data['mask'] = disso_mask
+        # Active channel
+        data['active_signal'] = sample['raw_active_bl']
+        koff, R0, t0  = popt_act
+        data['active_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        # Reference channel
+        data['reference_signal'] = sample['raw_reference_bl']
+        koff, R0, t0 = popt_ref
+        data['reference_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
 
         if blank is not None:
-            t_blk = blank['time']
-            t_blk_inj = blank['markers'].get('Injection')
-            blk_bl_mask = t_blk < t_blk_inj
-            blank_signal = blank['signal'] - blank['signal'][blk_bl_mask].mean() if blk_bl_mask.any() else blank['signal'] - blank['signal'][0]
-            ax.plot(blank['time'], blank_signal, color='grey', linewidth=1.0, label='Blank (baseline-subtracted)')
+            t_blank = blank['time']
+            data['blank_time'] = t_blank
+            t_blank_inj = blank['markers'].get('Injection')
+            blank_bl_mask = t_blank < t_blank_inj
+            data['blank_signal'] = blank['signal'] - blank['signal'][blank_bl_mask].mean() if blank_bl_mask.any() else blank['signal'] - blank['signal'][0]
 
-        ax.set_title(item['label'], fontsize=10)
+        return data
+
+    def _get_fig2_data(self, sample, popt_senso):
+        data = {}
+        t = sample['time']
+        data['time'] = t
+        t_rinse = sample['markers'].get('Rinse')
+        disso_mask = t > t_rinse
+        data['mask'] = disso_mask
+        data['signal'] = sample['sensorgram']
+
+        koff, R0, t0 = popt_senso
+        data['fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+
+        return data
+
+    def make_first_figure(self, data, koff_act, koff_ref, label):
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(data['sample_time'], data['active_signal'], color='red', linewidth=1.5, label='Active (baseline-subtracted)')
+        ax.plot(data['sample_time'], data['reference_signal'], color='blue', linewidth=1.5, label='Reference (baseline-subtracted)')
+        ax.plot(data['sample_time'][data['mask']], data['active_fit'], color='orange', linestyle='--', linewidth=1.2, label=f'Disso. fit (active)\nkoff = {koff_act:.2f}')
+        ax.plot(data['sample_time'][data['mask']], data['reference_fit'], color='cyan', linestyle='--', linewidth=1.2, label=f'Disso. fit (reference)\nkoff = {koff_ref:.2f}')
+
+        if data['blank_signal'] is not None:
+            ax.plot(data['blank_time'], data['blank_signal'], color='grey', linewidth=1.0, label='Blank (baseline-subtracted)')
+
+        ax.set_title(label, fontsize=10)
         ax.set_xlabel('Time (s)')
         ax.set_ylabel('Response (pg/mm²)')
         ax.legend(fontsize=8, loc='upper right')
@@ -834,22 +873,13 @@ class CheckSensorgramsScreen(Screen):
         fig.tight_layout()
         return fig
 
-    def make_second_figure(self, item):
-        sample = item['sample']
-        t = sample['time']
-        t_rinse = sample['markers'].get('Rinse')
-        disso_mask = t > t_rinse
-        signal = sample['sensorgram']
-
+    def make_second_figure(self, data, koff, bind_resp, label):
         fig, ax = plt.subplots(figsize=(12, 4))
-        ax.plot(t, signal, color='black', linewidth=1.5, label='Sensorgram')
+        ax.plot(data['time'], data['signal'], color='black', linewidth=1.5, label='Sensorgram')
+        ax.plot(data['time'][data['mask']], data['fit'], color='purple', linestyle='--', linewidth=1.2, label=f'Disso. fit\nkoff={koff:.2f}')
+        ax.plot([], [], ' ', label=f"Bind. response = {bind_resp:.2e}")
 
-        koff, R0, t0 = item['popt_sensorgram']
-        disso_fit = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        ax.plot(t[disso_mask], disso_fit, color='purple', linestyle='--', linewidth=1.2, label=f'Disso. fit\nkoff={koff:.2f}')
-        ax.plot([], [], ' ', label=f"Bind. response = {item['binding_response']:.2e}")
-
-        ax.set_title(f'Double-referenced signal for {item['label']}', fontsize=10)
+        ax.set_title(f'Double-referenced signal for {label}', fontsize=10)
         ax.set_xlabel('Time (s)')
         ax.set_ylabel('Response (pg/mm²)')
         ax.legend(fontsize=8, loc='upper right')
