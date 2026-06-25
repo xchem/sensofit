@@ -1,15 +1,16 @@
-# Data Loader — Detailed Documentation
+# Data/Package Loader — Detailed Documentation
 
 ## Overview
 
-`sensofit.data_loader.load_cxw()` parses Creoptix WAVE .cxw
-experiment files and returns structured Python dicts with all cycle
+`sensofit.data_loader.load_cxw()` or `sensofit.package_loader.load_experiment()` parses 
+Creoptix WAVE .cxw experiment files or  and returns structured Python dicts with all cycle
 metadata and signal data ready for fitting.
 
 ---
 
-## 1. CXW File Format
+## 1. Inputs
 
+### .CXW file
 A `.cxw` file is a **ZIP archive** containing:
 
 ```
@@ -22,7 +23,7 @@ myexperiment.cxw (ZIP)
 └── Correctors/            # XML: timing/offset corrections (not used)
 ```
 
-### 1a. _project.cx3 (XML)
+#### _project.cx3 (XML)
 
 The master metadata file. Key structure:
 
@@ -66,22 +67,22 @@ The master metadata file. Key structure:
 </Project>
 ```
 
-### 1b. cyclesData.h5 (HDF5)
+#### cyclesData.h5 (HDF5)
 
 Raw signal data keyed by `{GUID}.{channel}`:
 
-| Key pattern     | Content                          |
-|-----------------|----------------------------------|
-| `{GUID}.0`      | Time array (seconds)             |
-| `{GUID}.7`      | FC1 signal (reference, if FC1)   |
-| `{GUID}.9`      | FC2 signal (active, if FC2)      |
-| `{GUID}.11`     | FC3 signal                       |
-| `{GUID}.13`     | FC4 signal                       |
+| Key pattern     | Content              |
+|-----------------|----------------------|
+| `{GUID}.0`      | Time array (seconds) |
+| `{GUID}.7`      | FC1 signal           |
+| `{GUID}.9`      | FC2 signal           |
+| `{GUID}.11`     | FC3 signal           |
+| `{GUID}.13`     | FC4 signal           |
 
 Channel mapping: FC *n* → HDF5 channel `5 + 2n`
 (FC1→7, FC2→9, FC3→11, FC4→13).
 
-### 1c. Wizard/*.cx3 (XML)
+#### Wizard/*.cx3 (XML)
 
 Per-serie reagent definitions with slot-to-compound mapping:
 
@@ -93,6 +94,26 @@ Per-serie reagent definitions with slot-to-compound mapping:
 </Wizard>
 ```
 
+### .ZIP file / package directory
+A `.zip` file or an extracted package directory (created using `sensofit.dataexporter.export_package()`) contains:
+```
+mypackage
+├── experiment1/                          # Directory for 1st .cxw file exported
+├── ...                                   # All directories contains similar structure
+├── experimentN/                          # Directory for Nth .cxw file exported
+│   ├── CompoundID_CuM_cycID/             # Directory for sample cycles
+│   │   ├── FCY-FCX.csv                   # Raw data: time, FCY-FCX, FCY, FCX (with X -> reference channel and Y -> active channel)
+│   │   ├── kinetics.json                 # Fitting reports (if availble) from original .cxw file
+│   │   └── metadata.json                 # Metadata exposed by `sensofit.data_loader.load_cxw`
+│   ├── CycleType_0uM_cycID/              # Directory for Blank, DMSO, Startup and TubingWash cyles
+│   │   ├── FCY-FCX.csv                   # Raw data: time, FCY-FCX, FCY, FCX
+│   │   └── metadata.json                 # Metadata exposed by `sensofit.data_loader.load_cxw`
+│   ├── creoptix_kinetics_evaluations.csv # Creoptix Kinetics evaluation output
+│   ├── experiment.json                   # Experiment information
+│   └── immobilization.csv                # Immobilization raw data (capture name, channel, time, capture level)
+├── all_creoptic_kinetics_evaluations.csv # Concatenation of all `creoptix_kinetics_evaluations.csv` from each experiment
+└── README.md                             # A README explaining the content of the data package (automatically generated)
+```
 ---
 
 ## 2. Loading Pipeline
@@ -100,7 +121,7 @@ Per-serie reagent definitions with slot-to-compound mapping:
 ### Step 1: Open ZIP and Parse XML
 
 ```python
-data = load_cxw('experiment.cxw')
+data = load_experiment('experiment.cxw')
 ```
 
 1. Open `.cxw` as ZIP
@@ -109,11 +130,11 @@ data = load_cxw('experiment.cxw')
 
 ### Step 2: Detect Flow Cell Configuration
 
-The loader automatically determines which flow cells are active (ligand)
+The loader automatically determines which flow cells are active (protein)
 and reference (unmodified) by examining the XML:
 
 1. Find the **Capture** cycle in the **Immobilization** serie → this is
-   the active flow cell (where ligand was immobilised)
+   the active flow cell (where protein was immobilised)
 2. Find which FCs are used in **Pulse** (RAPID Kinetics) sample cycles
 3. The non-capture FC is the reference
 
@@ -146,7 +167,7 @@ For each cycle of interest (Sample, ControlSample, Blank, DMSO Cal.):
 ## 3. Output Structure
 
 ```python
-data = load_cxw('experiment.cxw')
+data = load_experiment('experiment.cxw')
 
 data['config']
 # {
@@ -191,15 +212,15 @@ Blank → DMSO Cal → Sample → Sample → Sample → Blank → DMSO Cal → .
 Each sample sensorgram has three phases:
 
 ```
-┌───────────────────────────────────────────────────────┐
-│                                                       │
-│  Baseline │    Association (pulsed)    │ Dissociation │
-│  (buffer) │ ┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐     │  (buffer)    │
-│           │ │└┘└┘└┘└┘└┘└┘└┘└┘└┘└┘│     │              │
-│───────────┘                         └──│──────────    │
-│                                        │              │
-│  t=0     Injection              Rinse    RinseEnd     │
-└───────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                                                  │
+│ Baseline  │ Association (pulsed) │ Dissociation  │
+│ (buffer)  │┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐┌┐│  (buffer)     │
+│           ││└┘└┘└┘└┘└┘└┘└┘└┘└┘└┘││               │
+│───────────┘                      └───────────│─  │
+│                                              │   │
+│t=0    Injection                Rinse     RinseEnd│
+└──────────────────────────────────────────────────┘
 ```
 
 - **Baseline**: Buffer flowing, no analyte. Establishes zero level.

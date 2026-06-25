@@ -12,16 +12,17 @@ using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, foll
 - **Direct Kinetics (DK)** — millisecond-scale linear fit from dR/dt vs R
 - **ODE fitting** — full 1:1 Langmuir ODE solved with `scipy.integrate.solve_ivp`
 - **Batch processing** — fit all samples in a file with one call
-- **Non-specific binder detection** — flags samples with reference channel retention
-- **Quality flags** — automatic detection of boundary hits, high residuals, failed fits
+- **Sensorgram heuristics** — flags samples with expert-defined annotation (e.g. noisy, non-specific-binder, etc...)
+- **Goodness-of-fit** — automatically assert the quality of the fit
 - **Plotting** — annotated data-vs-model overlays saved as individual PNGs
 - **CLI** — command-line batch processing of one or many `.cxw` files
+- **GUI** — Graphical User Interface for differents modules (protocol development, check sensorgrams, fit sensorgrams, export data package)
 
 ## Installation
 
 ```bash
 # Create a conda environment with dependencies
-conda create -n sensofit python=3.11
+conda create -n sensofit python=3.12
 conda activate sensofit
 ```
 Clone/copy this repository, cd to the root, then install the package using the following command:
@@ -32,6 +33,8 @@ pip install -e .
 ## Quick Start
 
 ### Python API
+
+#### Batch processing
 
 ```python
 from sensofit import load_cxw, batch_fit, flag_poor_fits
@@ -48,9 +51,18 @@ df, data = batch_fit('experiment.cxw', mode='ode', n_starts=10)
 df.to_csv('results.csv', index=False)
 ```
 
+#### Export package
+```python
+from sensofit import export_package
+
+export_package(['file1.cxw', 'file2.cxw'],
+               '/tmp/my_dataset.zip',
+               package_name='my_dataset')
+```
+
 ### Command Line
 
-The CLI has two modes: **batch fitting** (default) and **data export** (`export` subcommand).
+The CLI has 4 modes: **batch fitting** (default) and **data export** (`export` subcommand) **protocol development** (`protocol-dev` subcommand) and **graphical user interface** (`gui` subcommand).
 
 #### Batch fitting
 
@@ -63,9 +75,6 @@ python -m sensofit data_folder/ --mode dk -o results/
 
 # Run both DK and ODE fits
 python -m sensofit data_folder/ --mode both -o results/
-
-# Include non-specific binders (default: skip them)
-python -m sensofit experiment.cxw --include-nsb -o results/
 
 # Restrict to specific active flow cells
 python -m sensofit experiment.cxw --channels 2 3 -o results/
@@ -88,16 +97,6 @@ python -m sensofit export experiment.cxw
 # Multiple files / directories → custom output zip and package name
 python -m sensofit export file1.cxw file2.cxw data_folder/ \
     -o /tmp/my_dataset.zip --name my_dataset
-```
-
-Equivalent Python API:
-
-```python
-from sensofit import export_package
-
-export_package(['file1.cxw', 'file2.cxw'],
-               '/tmp/my_dataset.zip',
-               package_name='my_dataset')
 ```
 
 ### CSV columns
@@ -123,19 +122,22 @@ export_package(['file1.cxw', 'file2.cxw'],
 sensofit/
 ├── __init__.py          # Public API: load_cxw, batch_fit, flag_poor_fits, export_package
 ├── __main__.py          # CLI entry point (python -m sensofit [export])
+├── batch.py             # Batch processing and quality flagging
 ├── data_loader.py       # .cxw file parser (ZIP → XML + HDF5)
+├── dataexporter.py      # Package raw .cxw data into a self-describing zip
 ├── models.py            # Preprocessing, concentration profiles, ODE model
 ├── direct_kinetics.py   # Fast DK fitting (dR/dt linear regression)
 ├── ode_fitting.py       # Full ODE fitting (DK → multi-start TRF)
-├── batch.py             # Batch processing and quality flagging
+├── package_loader.py    # .zip/dir parser
 ├── plotting.py          # Data-vs-model fit plots
-└── dataexporter.py      # Package raw .cxw data into a self-describing zip
+└── protocol_dev.py      # Currently a placeholder for future protocol development analysis tool
 ```
 
 ## Notebooks
 
 | Notebook | Description |
 |----------|-------------|
+| `00_data_release.ipynb` | SensoFit walkthrough (for OpenBind [first data release](https://openbind.uk/news/blog-affinity-and-kinetics-data-in-the-ev-a71-2a-openbind-release/))
 | `01_explore.ipynb` | Data exploration and signal inspection |
 | `02_fitting_demo.ipynb` | Single-sample fitting walkthrough |
 | `03_concentration_error.ipynb` | Concentration error analysis |
