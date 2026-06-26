@@ -469,7 +469,7 @@ class CheckSensorgramsScreen(Screen):
         popt_act, perr_act = fit_last_disso(sample_bl, channel='raw_active')
         popt_ref, perr_ref = fit_last_disso(sample_bl, channel='raw_reference')
         popt_senso, perr_senso = fit_last_disso(sample_bl, channel='signal', blank=blank)
-        bind_resp = _get_binding_response(sample_bl, blank)
+        bind_resp = _get_binding_response(sample_bl, sample_bl['sensorgram'])
 
         compound = sample_bl.get('compound', 'Unknown')
         cycle_id = sample_bl.get('index', 'n/a')
@@ -877,7 +877,7 @@ class CheckSensorgramsScreen(Screen):
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(data['time'], data['signal'], color='black', linewidth=1.5, label='Sensorgram')
         ax.plot(data['time'][data['mask']], data['fit'], color='purple', linestyle='--', linewidth=1.2, label=f'Disso. fit\nkoff={koff:.2f}')
-        ax.plot([], [], ' ', label=f"Bind. response = {bind_resp:.2e}")
+        ax.plot([], [], ' ', label=f"Bind. response = {bind_resp:.2f}")
 
         ax.set_title(f'Double-referenced signal for {label}', fontsize=10)
         ax.set_xlabel('Time (s)')
