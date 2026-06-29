@@ -300,7 +300,7 @@ class CheckSensorgramsScreen(Screen):
 
         ### RIGHT HAND SIDE (RHS)
         right_title = Label(
-            text='Sorted compounds',
+            text='Sorted cycles',
             size_hint_y=None,
             height=30,
             font_size='16sp',
