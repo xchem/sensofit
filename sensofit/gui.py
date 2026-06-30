@@ -466,10 +466,29 @@ class CheckSensorgramsScreen(Screen):
         sample_bl['raw_reference_bl'] = sample['raw_reference'] - sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'] - sample['raw_reference'][0]
         sample_bl['sensorgram'], _ = double_reference(sample, blank)
 
-        popt_act, perr_act = fit_last_disso(sample_bl, channel='raw_active')
-        popt_ref, perr_ref = fit_last_disso(sample_bl, channel='raw_reference')
-        popt_senso, perr_senso = fit_last_disso(sample_bl, channel='signal', blank=blank)
-        bind_resp = _get_binding_response(sample_bl, sample_bl['sensorgram'])
+        try:
+            popt_act, perr_act = fit_last_disso(sample_bl, channel='raw_active')
+        except Exception as e:
+            print(f"WARNING! Couldn't fit last dissociation for active channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
+                  f"Error: {e}")
+            popt_act, perr_act = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+        try:
+            popt_ref, perr_ref = fit_last_disso(sample_bl, channel='raw_reference')
+        except Exception as e:
+            print(f"WARNING! Couldn't fit last dissociation for reference channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
+                  f"Error: {e}")
+            popt_ref, perr_ref = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+        try:
+            popt_senso, perr_senso = fit_last_disso(sample_bl, channel='signal', blank=blank)
+        except Exception as e:
+            print(f"WARNING! Couldn't fit last dissociation for sample {sample_bl['compound']} (cycle {sample_bl['index']} | channel {sample_bl['channel']})...\n"
+                  f"Error: {e}")
+            popt_senso, perr_senso = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+        try:
+            bind_resp = _get_binding_response(sample_bl, sample_bl['sensorgram'])
+        except Exception as e:
+            print(f"WARNING! Couldn't get binding response for sample {sample_bl['compound']} (cycle {sample_bl['index']} | channel {sample_bl['channel']})...\n"
+                  f"Error: {e}")
 
         compound = sample_bl.get('compound', 'Unknown')
         cycle_id = sample_bl.get('index', 'n/a')
@@ -826,11 +845,17 @@ class CheckSensorgramsScreen(Screen):
         # Active channel
         data['active_signal'] = sample['raw_active_bl']
         koff, R0, t0  = popt_act
-        data['active_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        if not np.isnan(koff):
+            data['active_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        else:
+            data['active_fit'] = np.array([])
         # Reference channel
         data['reference_signal'] = sample['raw_reference_bl']
         koff, R0, t0 = popt_ref
-        data['reference_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        if not np.isnan(koff):
+            data['reference_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        else:
+            data['reference_fit'] = np.array([])
 
         if blank is not None:
             t_blank = blank['time']
@@ -851,7 +876,10 @@ class CheckSensorgramsScreen(Screen):
         data['signal'] = sample['sensorgram']
 
         koff, R0, t0 = popt_senso
-        data['fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        if not np.isnan(koff):
+            data['fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
+        else:
+            data['fit'] = np.array([])
 
         return data
 
@@ -859,8 +887,14 @@ class CheckSensorgramsScreen(Screen):
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(data['sample_time'], data['active_signal'], color='red', linewidth=1.5, label='Active (baseline-subtracted)')
         ax.plot(data['sample_time'], data['reference_signal'], color='blue', linewidth=1.5, label='Reference (baseline-subtracted)')
-        ax.plot(data['sample_time'][data['mask']], data['active_fit'], color='orange', linestyle='--', linewidth=1.2, label=f'Disso. fit (active)\nkoff = {koff_act:.2f}')
-        ax.plot(data['sample_time'][data['mask']], data['reference_fit'], color='cyan', linestyle='--', linewidth=1.2, label=f'Disso. fit (reference)\nkoff = {koff_ref:.2f}')
+        if data['active_fit'].any():
+            ax.plot(data['sample_time'][data['mask']], data['active_fit'], color='orange', linestyle='--', linewidth=1.2, label=f'Disso. fit (active)\nkoff = {koff_act:.2f}')
+        else:
+            ax.plot([], [], label=f'No disso. fit (active)\nkoff = nan')
+        if data['reference_fit'].any():
+            ax.plot(data['sample_time'][data['mask']], data['reference_fit'], color='cyan', linestyle='--', linewidth=1.2, label=f'Disso. fit (reference)\nkoff = {koff_ref:.2f}')
+        else:
+            ax.plot([], [], label=f'No disso. fit (ref)\nkoff = nan')
 
         if data['blank_signal'] is not None:
             ax.plot(data['blank_time'], data['blank_signal'], color='grey', linewidth=1.0, label='Blank (baseline-subtracted)')
@@ -876,7 +910,10 @@ class CheckSensorgramsScreen(Screen):
     def make_second_figure(self, data, koff, bind_resp, label):
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(data['time'], data['signal'], color='black', linewidth=1.5, label='Sensorgram')
-        ax.plot(data['time'][data['mask']], data['fit'], color='purple', linestyle='--', linewidth=1.2, label=f'Disso. fit\nkoff={koff:.2f}')
+        if data['fit'].any():
+            ax.plot(data['time'][data['mask']], data['fit'], color='purple', linestyle='--', linewidth=1.2, label=f'Disso. fit\nkoff={koff:.2f}')
+        else:
+            ax.plot([], [], label=f'No disso. fit\nkoff = nan')
         ax.plot([], [], ' ', label=f"Bind. response = {bind_resp:.2f}")
 
         ax.set_title(f'Double-referenced signal for {label}', fontsize=10)
