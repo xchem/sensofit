@@ -15,9 +15,9 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 
 import numpy as np
 from scipy.optimize import least_squares
-from .models import (build_pulsed_concentration_profile, select_dmso_cal,
-                     build_full_weight_mask, simulate_sensorgram,
-                     trim_to_fit_window)
+from .models import (build_pulsed_concentration_profile, double_reference,
+                     select_blank, select_dmso_cal, build_full_weight_mask, 
+                     simulate_sensorgram, trim_to_fit_window, fit_last_disso, fit_last_asso)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
 
@@ -253,7 +253,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     }
 
 
-def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
+def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates='DK',
                smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
@@ -281,13 +281,31 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         Full ODE fit results plus Direct Kinetics initial estimates
         and preprocessed signal arrays.
     """
-    # Step 1: Direct Kinetics for initial estimates
-    dk = dk_fit_sample(sample, dmso_cals, blanks=blanks,
-                       lambda_reg=lambda_reg,
-                       smoothing_factor=smoothing_factor)
+    # Step 1: Initial estimates
+    if initial_estimates == 'DK':
+        dk = dk_fit_sample(sample, dmso_cals, blanks=blanks,
+                        lambda_reg=lambda_reg,
+                        smoothing_factor=smoothing_factor)
+        t = dk['t']
+        signal = dk['signal']
+        blank_index = dk['blank_index']
+        seed_method = 'DK'
+        ka_seed = dk['ka']
+        kd_seed = dk['kd']
+        KD_seed = dk['KD']
+        Rmax_seed = dk['Rmax']
+    else:
+        t = sample['time']
+        asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
+        blank = select_blank(sample['index'], blanks) if blanks else None
+        blank_index = blank['index'] if blank else None
+        signal, _ = double_reference(sample, blank)
+        seed_method = 'last_pulse_fit'
+        kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
+        ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed) #popt[0], perr[0], koff, koff_err, fit, rmse
+        KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
+        Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
 
-    t = dk['t']
-    signal = dk['signal']
 
     # Build pulsed c(t) for ODE fitting (preserves pulse structure)
     dmso = select_dmso_cal(sample['index'], dmso_cals)
@@ -308,7 +326,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
 
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
-                  ka0=dk['ka'], kd0=dk['kd'], Rmax0=dk['Rmax'],
+                  ka0=ka_seed, kd0=kd_seed, Rmax0=Rmax_seed,
                   n_starts=n_starts)
 
     # Map R_fit back to full time grid
@@ -321,20 +339,19 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     ode['residuals'] = residuals_full
 
     # Store envelope c_func for DK results / visualization
-    ode['c_func'] = dk['c_func']
+    ode['c_func'] = c_func_pulsed
 
     # Combine results
-    ode['dk_ka'] = dk['ka']
-    ode['dk_kd'] = dk['kd']
-    ode['dk_Rmax'] = dk['Rmax']
-    ode['dk_KD'] = dk['KD']
-    ode['R0_dissoc'] = dk['R0_dissoc']
+    ode['seed_method'] = seed_method
+    ode['ka_seed'] = ka_seed
+    ode['kd_seed'] = kd_seed
+    ode['Rmax_seed'] = Rmax_seed
+    ode['KD_seed'] = KD_seed
     ode['t'] = t
     ode['signal'] = signal
     if neg_ss_correction:
         ode['signal'] -= min_diss
-    ode['c_raw'] = dk['c_raw']
-    ode['dmso_index'] = dk['dmso_index']
-    ode['blank_index'] = dk['blank_index']
+    ode['dmso_index'] = dmso['index'] if dmso else None
+    ode['blank_index'] = blank_index
 
     return ode

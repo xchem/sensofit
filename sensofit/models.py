@@ -19,6 +19,30 @@ from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
 
 # ---------------------------------------------------------------------------
+# Root Mean Square Error (RMSE) for model fitting
+# ---------------------------------------------------------------------------
+
+def get_rmse(y_true, y_pred):
+    """Calculate the root mean square error (RMSE) between true and predicted values.
+
+    Parameters
+    ----------
+    y_true : array-like
+        True values.
+    y_pred : array-like
+        Predicted values.
+
+    Returns
+    -------
+    rmse : float
+        The RMSE value.
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+
+# ---------------------------------------------------------------------------
 # Concentration profile from DMSO calibration
 # ---------------------------------------------------------------------------
 
@@ -769,24 +793,73 @@ def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict =
     if channel != "signal":
         signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][0]
     else:
-        if blank is not None:
-            signal, _ = double_reference(sample, blank)
+        signal, _ = double_reference(sample, blank)
     signal = signal[disso_mask]
     R0 = signal[0]
     try:
-        popt, pcov = curve_fit(_disso_rate_equation, xdata=t, ydata=signal, p0=[1, R0, t0])
+        popt, pcov = curve_fit(lambda t, kon: _disso_rate_equation(t, kon, R0, t0), xdata=t, ydata=signal, p0=[1], bounds=(0, 10))
     except Exception as e:
-        print(f"Warning! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample[channel]}).\n"
+        print(f"Warning! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
               f"Error: {e}")
         if debug:
-            return t, signal, [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            return t, signal, np.nan, np.nan, np.array([]), np.nan, R0, t0
         else:
-            return  [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            return  np.nan, np.nan, np.array([]), np.nan
     perr = np.sqrt(np.diag(pcov))
+    fit = _disso_rate_equation(t, popt[0], R0, t0)
+    rmse = get_rmse(signal, fit)
     if debug:
-        return t, signal, popt, pcov, perr
-    return popt, perr
+        return t, signal, popt[0], perr[0], fit, rmse, R0, t0
+    return popt[0], perr[0], fit, rmse
 
+
+# ---------------------------------------------------------------------------
+# Last dissociation fit
+# ---------------------------------------------------------------------------
+
+def _asso_rate_equation(t, kon, koff, C, Req, t0):
+    return Req * (1 - np.exp(-(kon * C + koff) * (t-t0)))
+    
+
+def fit_last_asso(sample: dict = {}, blank: dict = None, koff: float = 0.0, debug=False):
+    from scipy.optimize import curve_fit
+    t = sample["time"]
+    signal, _ = double_reference(sample, blank)
+    C = sample['concentration_M']
+    t_inj = sample['markers'].get('Injection')
+    t0 = t_inj
+    for t_pulse in sample['pulse_durations_s']:
+        t1 = t0 + t_pulse
+        if t_pulse == 3.0312500000000004:
+            t0 = t1
+            continue
+        pulse_mask = (t >= t0) & (t <= t1)
+        t0 = t1
+    signal = signal[pulse_mask] # Get last asso. pulse only
+    t = t[pulse_mask]
+    t0 = t[0]
+    Req = signal.max()
+    try:
+        if koff:
+            popt, pcov = curve_fit(lambda t, kon: _asso_rate_equation(t, kon, koff, C, Req, t0), xdata=t, ydata=signal, p0=[1e3], bounds=(1e2, 1e9))
+        else:
+            popt, pcov = curve_fit(lambda t, kon, koff: _asso_rate_equation(t, kon, koff, C, Req, t0), xdata=t, ydata=signal, p0=[1e3, 1], bounds=([1e2, 0], [1e9, 10]))
+            koff = popt[1]
+    except Exception as e:
+        print(f"Warning! Couldn't fit association pulses of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
+              f"Error: {e}")
+        koff = koff if koff else np.nan
+        if debug:
+            return t, signal, np.nan, np.nan, koff, np.nan, np.array([]), np.nan, C, Req, t0
+        else:
+            return np.nan, np.nan, koff, np.nan, np.array([]), np.nan
+    perr = np.sqrt(np.diag(pcov))
+    koff_err = perr[1] if len(perr) == 2 else np.nan
+    fit = _asso_rate_equation(t, popt[0], koff, C, Req, t0)
+    rmse = get_rmse(signal, fit)
+    if debug:
+        return t, signal, popt[0], perr[0], koff, koff_err, fit, rmse, C, Req, t0
+    return popt[0], perr[0], koff, koff_err, fit, rmse
 
 # ---------------------------------------------------------------------------
 # 1:1 Langmuir ODE
