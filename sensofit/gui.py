@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 from .package_loader import load_experiment
-from .models import select_blank, _get_binding_response, fit_last_disso, _disso_rate_equation, double_reference
+from .models import select_blank, _get_binding_response, fit_last_disso, double_reference
 
 MODULES = {
     'protocol_dev': {
@@ -490,23 +490,23 @@ class CheckSensorgramsScreen(Screen):
         sample_bl['sensorgram'], _ = double_reference(sample, blank)
 
         try:
-            popt_act, perr_act = fit_last_disso(sample_bl, channel='raw_active')
+            koff_act, koff_act_err, koff_act_fit = fit_last_disso(sample_bl, channel='raw_active')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for active channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
-            popt_act, perr_act = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_act, koff_act_err, koff_act_fit = np.nan, np.nan, np.array([])
         try:
-            popt_ref, perr_ref = fit_last_disso(sample_bl, channel='raw_reference')
+            koff_ref, koff_ref_err, koff_ref_fit = fit_last_disso(sample_bl, channel='raw_reference')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for reference channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
-            popt_ref, perr_ref = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_ref, koff_ref_err, koff_ref_fit = np.nan, np.nan, np.array([])
         try:
-            popt_senso, perr_senso = fit_last_disso(sample_bl, channel='signal', blank=blank)
+            koff_senso, koff_senso_err, koff_senso_fit = fit_last_disso(sample_bl, channel='signal', blank=blank)
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for sample {sample_bl['compound']} (cycle {sample_bl['index']} | channel {sample_bl['channel']})...\n"
                   f"Error: {e}")
-            popt_senso, perr_senso = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_senso, koff_senso_err, koff_senso_fit = np.nan, np.nan, np.array([])
         try:
             bind_resp = _get_binding_response(sample_bl, sample_bl['sensorgram'])
         except Exception as e:
@@ -518,8 +518,8 @@ class CheckSensorgramsScreen(Screen):
         channel = sample_bl.get('channel', 'n/a')
         label = f'{compound} (cycle {cycle_id} - channel {channel})'
 
-        fig1_data = self._get_fig1_data(sample_bl, blank, popt_act, popt_ref)
-        fig2_data = self._get_fig2_data(sample_bl, popt_senso)
+        fig1_data = self._get_fig1_data(sample_bl, blank, koff_act_fit, koff_ref_fit)
+        fig2_data = self._get_fig2_data(sample_bl, koff_senso_fit)
 
         self.samples_info.append({
             'label': label,
@@ -528,12 +528,12 @@ class CheckSensorgramsScreen(Screen):
             'channel': channel,
             'fig1_data': fig1_data,
             'fig2_data': fig2_data,
-            'koff_active': float(popt_act[0]),
-            'koff_active_error': float(perr_act[0]),
-            'koff_reference': float(popt_ref[0]),
-            'koff_reference_error': float(perr_ref[0]),
-            'koff_sensorgram': float(popt_senso[0]),
-            'koff_sensorgram_error': float(perr_senso[0]),
+            'koff_active': float(koff_act),
+            'koff_active_error': float(koff_act_err),
+            'koff_reference': float(koff_ref),
+            'koff_reference_error': float(koff_ref_err),
+            'koff_sensorgram': float(koff_senso),
+            'koff_sensorgram_error': float(koff_senso_err),
             'binding_response': float(bind_resp),
             'sample': sample_bl,
             'blank': blank,
@@ -874,7 +874,7 @@ class CheckSensorgramsScreen(Screen):
         self.plot_image_1.texture = self.make_plot_texture(self.make_first_figure(fig1_data, koff_act, koff_ref, label))
         self.plot_image_2.texture = self.make_plot_texture(self.make_second_figure(fig2_data, koff_senso, bind_resp, label))
 
-    def _get_fig1_data(self, sample, blank, popt_act, popt_ref):
+    def _get_fig1_data(self, sample, blank, koff_act_fit, koff_ref_fit):
         data = {'blank_time': None, 'blank_signal': None}
         t = sample['time']
         data['sample_time'] = t
@@ -883,18 +883,10 @@ class CheckSensorgramsScreen(Screen):
         data['mask'] = disso_mask
         # Active channel
         data['active_signal'] = sample['raw_active_bl']
-        koff, R0, t0  = popt_act
-        if not np.isnan(koff):
-            data['active_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['active_fit'] = np.array([])
+        data['active_fit'] = koff_act_fit
         # Reference channel
         data['reference_signal'] = sample['raw_reference_bl']
-        koff, R0, t0 = popt_ref
-        if not np.isnan(koff):
-            data['reference_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['reference_fit'] = np.array([])
+        data['reference_fit'] = koff_ref_fit
 
         if blank is not None:
             t_blank = blank['time']
@@ -905,7 +897,7 @@ class CheckSensorgramsScreen(Screen):
 
         return data
 
-    def _get_fig2_data(self, sample, popt_senso):
+    def _get_fig2_data(self, sample, koff_senso_fit):
         data = {}
         t = sample['time']
         data['time'] = t
@@ -913,13 +905,7 @@ class CheckSensorgramsScreen(Screen):
         disso_mask = t > t_rinse
         data['mask'] = disso_mask
         data['signal'] = sample['sensorgram']
-
-        koff, R0, t0 = popt_senso
-        if not np.isnan(koff):
-            data['fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['fit'] = np.array([])
-
+        data['fit'] = koff_senso_fit
         return data
 
     def make_first_figure(self, data, koff_act, koff_ref, label):
