@@ -490,19 +490,19 @@ class CheckSensorgramsScreen(Screen):
         sample_bl['sensorgram'], _ = double_reference(sample, blank)
 
         try:
-            koff_act, koff_act_err, koff_act_fit = fit_last_disso(sample_bl, channel='raw_active')
+            koff_act, koff_act_err, koff_act_fit, _ = fit_last_disso(sample_bl, channel='raw_active')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for active channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
             koff_act, koff_act_err, koff_act_fit = np.nan, np.nan, np.array([])
         try:
-            koff_ref, koff_ref_err, koff_ref_fit = fit_last_disso(sample_bl, channel='raw_reference')
+            koff_ref, koff_ref_err, koff_ref_fit, _ = fit_last_disso(sample_bl, channel='raw_reference')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for reference channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
             koff_ref, koff_ref_err, koff_ref_fit = np.nan, np.nan, np.array([])
         try:
-            koff_senso, koff_senso_err, koff_senso_fit = fit_last_disso(sample_bl, channel='signal', blank=blank)
+            koff_senso, koff_senso_err, koff_senso_fit, _ = fit_last_disso(sample_bl, channel='signal', blank=blank)
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for sample {sample_bl['compound']} (cycle {sample_bl['index']} | channel {sample_bl['channel']})...\n"
                   f"Error: {e}")
@@ -537,12 +537,6 @@ class CheckSensorgramsScreen(Screen):
             'binding_response': float(bind_resp),
             'sample': sample_bl,
             'blank': blank,
-            'popt_active': popt_act,
-            'perr_active': perr_act,
-            'popt_reference': popt_ref,
-            'perr_reference': perr_ref,
-            'popt_sensorgram': popt_senso,
-            'perr_sensorgram': perr_senso,
             'binding_flag': False,
             'no_binding_flag': False,
             'non_specific_flag': False,
