@@ -346,22 +346,17 @@ def _get_binding_response(sample: dict, signal: np.ndarray):
     """
     t = sample['time']
     markers = sample['markers']
-    inj_time = markers.get('Injection', t[0])
     rinse_time = markers.get('Rinse', t[-1])
-
-    # check if there is a negative response after injection (t = inj_time -> t = inj_time + 5s)
-    inj_mask = (t >= inj_time) & (t <= inj_time + 5)
-    inj_resp = signal[inj_mask].mean()
-    if inj_resp <= -1.0:
-        return 0.0
     
     # 2-5 s before rinse: RI bulk gone, only true binding remains
     resp_mask = (t >= rinse_time - 2) & (t <= rinse_time)
     if not resp_mask.any():
+        print(f"WARNING! Binding response cannot be calculated for sample {sample['index']} (channel {sample['channel']}). "
+              "Returning 0.0 as binding response.")
         return 0.0
 
     bind_resp = float(signal[resp_mask].mean())
-    return bind_resp
+    return bind_resp if bind_resp >= 0 else 0.0  # Return 0.0 if negative response detected
 
 
 def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0):
@@ -391,34 +386,43 @@ def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float
     return baseline_std > (percent_threshold / 100.0) * np.max(np.abs(signal)), baseline_std
 
 
-def has_injection_error(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0, time_window: float = 25.0):
+def has_injection_error(sample: dict, threshold: float = 2.5, time_window: float = 25.0):
     """Detect injection errors in a sample cycle.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    signal : np.ndarray
-        Double-referenced (or baseline-subtracted) signal from sample.
-    percent_threshold : float
+    threshold : float
         Threshold for the absolute value of the signal before injection 
         above which it is considered an injection error. 
-        Default 10.0% of the maximum abs(signal) value.
+        Default 2.5 times the baseline std value.
+    time_window : float
+        The duration (in seconds) of the time window before the injection 
+        to consider for error detection and to use for baseline std calculation 
+        (if baseline mask cannot be generated). Default 25.0 seconds.
 
     Returns
     -------
     error : bool
-        True if - threshold > signal before injection > threshold.
-    inj_signal : float
-        double-referenced signal before injection, used for error assessment.
+        True if - threshold > signal before injection > threshold for both reference 
+        and active channels.
+    inj_signal : tuple
+        Minimum and maximum signal before injection for both reference and active channels, 
+        used for error assessment.
     """
     t = sample['time']
     inj_time = sample['markers'].get('Injection', t[0])
     inj_mask = (t > inj_time - time_window) & (t <= inj_time)
-    inj_signal = signal[inj_mask]
-    threshold = (percent_threshold / 100.0) * np.max(np.abs(signal))
-    error = np.any(inj_signal <= -threshold) or np.any(inj_signal >= threshold)
-    return error, (inj_signal.min() if inj_mask.any() else signal.min(), inj_signal.max() if inj_mask.any() else signal.max())
+    bl_mask = t <= inj_time
+    ref_bl = sample["raw_reference"][bl_mask] if bl_mask.any() else sample["raw_reference"][:time_window]
+    active_bl = sample["raw_active"][bl_mask] if bl_mask.any() else sample["raw_active"][:time_window]
+    ref = sample["raw_reference"] - ref_bl.mean()
+    active = sample["raw_active"] - active_bl.mean()
+    threshold_ref = threshold * np.std(ref_bl)
+    threshold_active = threshold * np.std(active_bl)
+    error = np.any(ref[inj_mask] < -threshold_ref) or np.any(ref[inj_mask] > threshold_ref) or np.any(active[inj_mask] < -threshold_active) or np.any(active[inj_mask] > threshold_active)
+    return error, (ref[inj_mask].min() if inj_mask.any() else ref.min(), ref[inj_mask].max() if inj_mask.any() else ref.max(), active[inj_mask].min() if inj_mask.any() else active.min(), active[inj_mask].max() if inj_mask.any() else active.max())
 
 
 def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
@@ -432,7 +436,7 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
     percent_threshold : float
         Threshold for the baseline-subtracted signal in the raw_reference channel 
         below which it is considered too negative. 
-        Default 5.0% of -abs(max(signal)).
+        Default 5.0% of min(signal).
 
     Returns
     -------
@@ -514,46 +518,60 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_thresh
     return (bind_resp/baseline_std) <= snr_threshold if baseline_std != 0.0 else False, bind_resp
 
 
-def is_nonspecific_binder(sample: dict, percent_threshold: float = 5.0):
+def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_threshold: float = 5.0):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
     reference surface after rinse.  This is measured as a
-    positive baseline-subtracted raw_reference signal 2-5 s into
+    low disssociation constant in the reference channel.
+    If dissociation fit fails, non-specific binding is detected based 
+    on a positive baseline-subtracted raw_reference signal 2-5 s into
     the dissociation phase (after RI bulk has been rinsed away).
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    percent_threshold : float
+    koff_threshold : float
+        Threshold for the dissociation constant of the reference channel.
+     percent_threshold : float
         Threshold for the baseline-subtracted signal in the raw_reference channel 
-        above which the sample is classified as a non-specific binder.  
+        above which the sample is classified as a non-specific binder (in case 
+        fitting fails).  
         Default 5.0% of the maximum abs(signal) value.
 
     Returns
     -------
     nsb : bool
-        True if the sample is a non-specific binder.
-    ref_dissoc : float
-        Baseline-subtracted reference signal at dissociation onset.
+        True if the koff_ref < koff_active or koff_ref <= koff_threshold.
+    koffs : tuple
+        Fitted dissociation constants for the reference and active channels.
     """
-    t = sample['time']
-    ref = sample['raw_reference']
-    markers = sample['markers']
-    inj = markers.get('Injection', t[0])
-    rinse = markers.get('Rinse', t[-1])
+    try:
+        koff_ref, _, _, _ = fit_last_disso(sample, channel="raw_reference")
+        koff_active, _, _, _ = fit_last_disso(sample, channel="raw_active")
+        if koff_ref <= koff_threshold:
+            return True, (koff_ref, koff_active)  # Reference channel shows some interactions
+        return koff_ref < koff_active, (koff_ref, koff_active)
+    except Exception as e: 
+        print(f"WARNING: Could not fit last dissociation for sample {sample['index']} (channel {sample['channel']}). "
+              f"Exception: {e}. Checking non-specific based on response in reference channel only.")
+        t = sample['time']
+        ref = sample['raw_reference']
+        markers = sample['markers']
+        inj = markers.get('Injection', t[0])
+        rinse = markers.get('Rinse', t[-1])
 
-    bl_mask = t < inj
-    ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[0]
+        bl_mask = t < inj
+        ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[0]
 
-    # 2-5 s after rinse: RI bulk gone, only true binding remains
-    diss_mask = (t >= rinse + 2) & (t <= rinse + 5)
-    if not diss_mask.any():
-        return False, 0.0
+        # 2-5 s after rinse: RI bulk gone, only true binding remains
+        diss_mask = (t >= rinse + 2) & (t <= rinse + 5)
+        if not diss_mask.any():
+            return False, 0.0
 
-    ref_dissoc = float((ref[diss_mask] - ref_bl).mean())
-    return ref_dissoc > ((percent_threshold / 100.0) * np.max(np.abs(ref - ref_bl))), ref_dissoc
+        ref_dissoc = float((ref[diss_mask] - ref_bl).mean())
+        return ref_dissoc > ((percent_threshold / 100.0) * np.max(np.abs(ref - ref_bl))), ref_dissoc
 
 
 # ---------------------------------------------------------------------------

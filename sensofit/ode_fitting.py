@@ -284,38 +284,42 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
     """
     # Step 1: Initial estimates
     if initial_estimates == 'DK':
-        dk = dk_fit_sample(sample, dmso, blank=blank,
-                        lambda_reg=lambda_reg,
-                        smoothing_factor=smoothing_factor)
-        t = dk['t']
-        signal = dk['signal']
-        blank_index = dk['blank_index']
-        seed_method = 'DK'
-        ka_seed = dk['ka']
-        kd_seed = dk['kd']
-        KD_seed = dk['KD']
-        Rmax_seed = dk['Rmax']
-    elif initial_estimates == 'LPF':
-        t = sample['time']
-        asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
-        blank_index = blank['index'] if blank else None
-        signal, _ = double_reference(sample, blank)
-        seed_method = 'last_pulse_fit'
-        kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
-        ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed) #popt[0], perr[0], koff, koff_err, fit, rmse
-        KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
-        Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
+        try:
+            dk = dk_fit_sample(sample, dmso, blank=blank,
+                            lambda_reg=lambda_reg,
+                            smoothing_factor=smoothing_factor)
+            t = dk['t']
+            signal = dk['signal']
+            blank_index = dk['blank_index']
+            seed_method = 'DK'
+            ka_seed = dk['ka']
+            kd_seed = dk['kd']
+            KD_seed = dk['KD']
+            Rmax_seed = dk['Rmax']
+        except Exception as e:
+            print(f'WARNING! Direct Kinetics failed for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
+                  f'channel {sample.get("channel", "")}): {e}. Using default seeds for ODE fitting.')
+            kd_seed = 1e-3
+            ka_seed = 1e3
+            Rmax_seed = 10.0
     else:
-        print(f'WARNING! Unknown initial_estimates method "{initial_estimates}", defaulting to LPF (last-pulse fit).')
-        t = sample['time']
-        asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
-        signal, blank_index = double_reference(sample, blank)
-        seed_method = 'last_pulse_fit'
-        kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
-        ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
-        KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
-        Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
-
+        if initial_estimates != 'LPF':
+            print(f'WARNING! Unknown initial_estimates method "{initial_estimates}", defaulting to LPF (last-pulse fit).')
+        try:
+            t = sample['time']
+            asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
+            signal, blank_index = double_reference(sample, blank)
+            seed_method = 'last_pulse_fit'
+            kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
+            ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
+            KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
+            Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
+        except Exception as e:
+            print(f'WARNING! Last-pulse fit failed for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
+                  f'channel {sample.get("channel", "")}): {e}. Using default seeds for ODE fitting.')
+            kd_seed = 1e-3
+            ka_seed = 1e3
+            Rmax_seed = 10.0
 
     # Build pulsed c(t) for ODE fitting (preserves pulse structure)
     c_func_pulsed, _ = build_pulsed_concentration_profile(

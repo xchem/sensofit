@@ -128,10 +128,15 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
 
     # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blank=blank)
-    if "negative_signal_in_reference_channel" in heuristics:
+    if "negative_signal_in_reference_channel" in heuristics or "low_signal_to_noise_response" in heuristics:
         row = _fallback_row(sample, mode)
-        row['flag'] = True
-        row['flag_reason'] = '; '.join(heuristics)
+        row['no_binding'] = True
+        row['binding'] = False
+        row['non_specific'] = True if "non_specific_interaction" in heuristics else False
+        row['noisy'] = True if "noisy" in heuristics else False
+        row['injection_issue'] = True if "injection_issue" in heuristics else False
+        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['error'] = np.nan
         row['success'] = np.nan
         return [None, row]
 
@@ -143,12 +148,22 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             kwargs['n_starts'] = n_starts
         result = fit_func(sample, dmso, **kwargs)
         row = _extract_row(sample, result, mode)
-        row['flag'] = True if heuristics else False
-        row['flag_reason'] = heuristics[0] if heuristics else np.nan
+        row['no_binding'] = False
+        row['binding'] = True
+        row['non_specific'] = True if "non_specific_interaction" in heuristics else False
+        row['noisy'] = True if "noisy" in heuristics else False
+        row['injection_issue'] = True if "injection_issue" in heuristics else False
+        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['error'] = np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
-        row['flag'] = True
-        row['flag_reason'] = str(e)
+        row['no_binding'] = True
+        row['binding'] = False
+        row['non_specific'] = True if "non_specific_interaction" in heuristics else False
+        row['noisy'] = True if "noisy" in heuristics else False
+        row['injection_issue'] = True if "injection_issue" in heuristics else False
+        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['error'] = str(e)
         return [None, row]
 
     return [result, row]
@@ -255,7 +270,7 @@ def sensorgram_heuristics(sample, blank=None):
     noisy, _ = is_baseline_noisy(sample, signal)
     if noisy:
         heuristics.append('noisy')
-    inj_error, _ = has_injection_error(sample, signal)
+    inj_error, _ = has_injection_error(sample)
     if inj_error:
         heuristics.append('injection_issue')
     neg_ref, _ = is_reference_signal_negative(sample)
