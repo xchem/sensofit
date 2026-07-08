@@ -45,7 +45,7 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         # ODE mode: R_fit has NaN outside fit window
         mask = np.isfinite(R_fit)
         ax.plot(t[mask], R_fit[mask], color='red' if mode == 'ode' else 'blue', linewidth=1.2,
-                linestyle='--', label='ODE fit')
+                linestyle='--', label='ODE fit' if mode == 'ode' else 'DK fit')
     if 'R_smooth' in result:
         # DK mode: plot smoothed signal
         ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
