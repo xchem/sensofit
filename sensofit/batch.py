@@ -17,7 +17,7 @@ from .data_loader import load_cxw
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_error, is_reference_signal_negative,
                      is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
-                     double_reference, select_blank)
+                     double_reference, select_blank, select_dmso_cal, get_weight_from_derivative)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
@@ -122,9 +122,12 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         ch_dmso = dmso_cals
     if not ch_blanks:
         ch_blanks = blanks
+    # Select blank and DMSO cal closest in time to the sample
+    blank = select_blank(sample['index'], ch_blanks) if ch_blanks else None
+    dmso = select_dmso_cal(sample['index'], ch_dmso) if ch_dmso else None
 
     # Check for negative signal in reference channel before fitting
-    heuristics = sensorgram_heuristics(sample, blanks=ch_blanks)
+    heuristics = sensorgram_heuristics(sample, blank=blank)
     if "negative_signal_in_reference_channel" in heuristics:
         row = _fallback_row(sample, mode)
         row['flag'] = True
@@ -133,10 +136,12 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         return [None, row]
 
     try:
-        kwargs = {'blanks': ch_blanks}
+        kwargs = {'blank': blank}
         if mode == 'ode':
+            w = get_weight_from_derivative(sample, blank)
+            kwargs["association_weight"] = w
             kwargs['n_starts'] = n_starts
-        result = fit_func(sample, ch_dmso, **kwargs)
+        result = fit_func(sample, dmso, **kwargs)
         row = _extract_row(sample, result, mode)
         row['flag'] = True if heuristics else False
         row['flag_reason'] = heuristics[0] if heuristics else np.nan
@@ -234,7 +239,7 @@ def _fallback_row(sample, mode):
     return row
 
 
-def sensorgram_heuristics(sample, blanks=None):
+def sensorgram_heuristics(sample, blank=None):
     """Heuristic to flag sensorgram to check if they should be fitted or not.
     Criteria:
     - Noisy: baseline std > 5% of max abs(signal)
@@ -244,8 +249,6 @@ def sensorgram_heuristics(sample, blanks=None):
     - Sample carryover: steady-state signal > 10% of max(abs(signal))
     - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(reference signal))
     """
-    if blanks:
-        blank = select_blank(sample['index'], blanks)
     signal, _ = double_reference(sample, blank)
 
     heuristics = []

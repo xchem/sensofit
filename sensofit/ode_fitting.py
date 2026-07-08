@@ -15,8 +15,7 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 
 import numpy as np
 from scipy.optimize import least_squares
-from .models import (build_pulsed_concentration_profile, double_reference,
-                     select_blank, select_dmso_cal, build_full_weight_mask, 
+from .models import (build_pulsed_concentration_profile, double_reference, build_full_weight_mask, 
                      simulate_sensorgram, trim_to_fit_window, fit_last_disso, fit_last_asso)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
@@ -253,7 +252,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     }
 
 
-def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates='LPF',
+def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF',
                smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
@@ -261,10 +260,10 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    dmso_cals : list[dict]
-        DMSO calibration cycles.
-    blanks : list[dict] or None
-        Blank cycles for double referencing.
+    dmso : dict or None
+        DMSO calibration cycle.
+    blank : dict or None
+        Blank cycle for double referencing.
     lambda_reg : float
         Tikhonov regularisation for Direct Kinetics initial estimates.
     initial_estimates : str
@@ -285,7 +284,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
     """
     # Step 1: Initial estimates
     if initial_estimates == 'DK':
-        dk = dk_fit_sample(sample, dmso_cals, blanks=blanks,
+        dk = dk_fit_sample(sample, dmso, blank=blank,
                         lambda_reg=lambda_reg,
                         smoothing_factor=smoothing_factor)
         t = dk['t']
@@ -299,7 +298,6 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
     elif initial_estimates == 'LPF':
         t = sample['time']
         asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
-        blank = select_blank(sample['index'], blanks) if blanks else None
         blank_index = blank['index'] if blank else None
         signal, _ = double_reference(sample, blank)
         seed_method = 'last_pulse_fit'
@@ -311,9 +309,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
         print(f'WARNING! Unknown initial_estimates method "{initial_estimates}", defaulting to LPF (last-pulse fit).')
         t = sample['time']
         asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
-        blank = select_blank(sample['index'], blanks) if blanks else None
-        blank_index = blank['index'] if blank else None
-        signal, _ = double_reference(sample, blank)
+        signal, blank_index = double_reference(sample, blank)
         seed_method = 'last_pulse_fit'
         kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
         ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
@@ -322,7 +318,6 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
 
 
     # Build pulsed c(t) for ODE fitting (preserves pulse structure)
-    dmso = select_dmso_cal(sample['index'], dmso_cals)
     c_func_pulsed, _ = build_pulsed_concentration_profile(
         dmso, sample['concentration_M'])
 

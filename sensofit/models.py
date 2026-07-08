@@ -647,7 +647,7 @@ def smooth_and_differentiate(t: np.ndarray, R: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Weight mask
+# Association pulses mask
 # ---------------------------------------------------------------------------
 
 def build_weight_mask(t: np.ndarray, markers: dict) -> np.ndarray:
@@ -734,6 +734,16 @@ def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
 
     return w
 
+
+def get_weight_from_derivative(sample, blank):
+    t = sample['time']
+    t_inj = sample['markers'].get("Injection")
+    t_rinse = sample['markers'].get("Rinse")
+    asso_mask = (t > t_inj) & (t <= t_rinse)
+    signal, _ = double_reference(sample, blank)
+    signal_scaled = (signal - signal.min()) / (signal.max() - signal.min())
+    dRdt_asso = np.diff(signal_scaled[asso_mask]) / np.diff(t[asso_mask]) 
+    return round(np.mean(np.abs(dRdt_asso)), 2) if dRdt_asso.any() else 0.0
 
 # ---------------------------------------------------------------------------
 # Fitting window trimming
