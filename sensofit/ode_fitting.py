@@ -253,7 +253,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     }
 
 
-def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates='DK',
+def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates='LPF',
                smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
@@ -267,6 +267,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
         Blank cycles for double referencing.
     lambda_reg : float
         Tikhonov regularisation for Direct Kinetics initial estimates.
+    initial_estimates : str
+        Method for initial estimates: 'DK' (Direct Kinetics) or 'LPF' (last-pulse fit).
     smoothing_factor : float or None
         Smoothing parameter for spline in Direct Kinetics.
     neg_ss_correction : bool
@@ -294,7 +296,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
         kd_seed = dk['kd']
         KD_seed = dk['KD']
         Rmax_seed = dk['Rmax']
-    else:
+    elif initial_estimates == 'LPF':
         t = sample['time']
         asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
         blank = select_blank(sample['index'], blanks) if blanks else None
@@ -303,6 +305,18 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0, initial_estimates
         seed_method = 'last_pulse_fit'
         kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
         ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed) #popt[0], perr[0], koff, koff_err, fit, rmse
+        KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
+        Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
+    else:
+        print(f'WARNING! Unknown initial_estimates method "{initial_estimates}", defaulting to LPF (last-pulse fit).')
+        t = sample['time']
+        asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
+        blank = select_blank(sample['index'], blanks) if blanks else None
+        blank_index = blank['index'] if blank else None
+        signal, _ = double_reference(sample, blank)
+        seed_method = 'last_pulse_fit'
+        kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
+        ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
         KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
         Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
 
