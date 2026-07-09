@@ -197,7 +197,7 @@ def _is_dmso_cal_valid(dmso_cycle: dict, verbose=False) -> bool:
     rinse_time = markers.get('Rinse', t[-1])
     bl_mask = t <= bl_time
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][:bl_time].mean()
+    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][:int(bl_time)].mean()
     dmso_signal = dmso_cycle['raw_active'] - baseline
     baseline_std = dmso_signal[bl_mask].std() if bl_mask.any() else 0.0
     max_response = dmso_signal[response_mask].max() if response_mask.any() else dmso_signal.max()
@@ -249,7 +249,7 @@ def _is_blank_valid(blank: dict, verbose=False) -> bool:
     rinse_time = markers.get('Rinse', t[-1])
     bl_mask = t <= bl_time
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][:bl_time].mean()
+    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][:int(bl_time)].mean()
     blank_signal = blank['signal'] - baseline
     baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
     steady_state = blank_signal[-10:].mean()
@@ -289,7 +289,7 @@ def double_reference(sample: dict, blank: dict):
 
     # Baseline-subtract sample
     bl_mask = t <= bl_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][:bl_time].mean()
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][:int(bl_time)].mean()
     s_bl = sample['signal'] - s_baseline
 
     if blank:
@@ -407,18 +407,18 @@ def has_injection_issue(sample: dict, percent_threshold: float = 15.0):
     """
     t = sample['time']
     bl_time = sample.get('baseline_duration_s', 45)
-    inj_time = sample['markers'].get('Injection', t[0])
+    inj_time = sample['markers'].get('Injection', bl_time + sample.get('contact_time_s', 25))
     bl_mask = t <= bl_time
     inj_mask = (t > bl_time) & (t < inj_time)
 
-    ref_bl_mean = sample["raw_reference"][bl_mask].mean() if bl_mask.any() else sample["raw_reference"][:bl_time].mean()
-    ref_bl = sample['raw_reference'][bl_mask] - ref_bl_mean if bl_mask.any() else sample['raw_reference'][:bl_time] - ref_bl_mean
-    ref_inj = sample["raw_reference"][inj_mask] - ref_bl_mean if inj_mask.any() else sample["raw_reference"][bl_time:inj_time] - ref_bl_mean
+    ref_bl_mean = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][:int(bl_time)].mean()
+    ref_bl = sample['raw_reference'][bl_mask] - ref_bl_mean if bl_mask.any() else sample['raw_reference'][:int(bl_time)] - ref_bl_mean
+    ref_inj = sample['raw_reference'][inj_mask] - ref_bl_mean if inj_mask.any() else sample['raw_reference'][int(bl_time):int(inj_time)] - ref_bl_mean
     ref_max = np.abs(sample['raw_reference'] - ref_bl_mean).max()
 
-    active_bl_mean = sample["raw_active"][bl_mask].mean() if bl_mask.any() else sample["raw_active"][:bl_time].mean()
-    active_bl = sample['raw_active'][bl_mask] - active_bl_mean if bl_mask.any() else sample['raw_active'][:bl_time] - active_bl_mean
-    active_inj = sample["raw_active"][inj_mask] - active_bl_mean if inj_mask.any() else sample["raw_active"][bl_time:inj_time] - active_bl_mean
+    active_bl_mean = sample["raw_active"][bl_mask].mean() if bl_mask.any() else sample["raw_active"][:int(bl_time)].mean()
+    active_bl = sample['raw_active'][bl_mask] - active_bl_mean if bl_mask.any() else sample['raw_active'][:int(bl_time)] - active_bl_mean
+    active_inj = sample["raw_active"][inj_mask] - active_bl_mean if inj_mask.any() else sample["raw_active"][int(bl_time):int(inj_time)] - active_bl_mean
     active_max = np.abs(sample['raw_active'] - active_bl_mean).max()
 
     delta_ref = np.abs(ref_bl.mean() - ref_inj.mean())
@@ -453,7 +453,7 @@ def is_reference_response_negative(sample: dict, percent_threshold: float = 10.0
     bl_mask = t <= bl_time
     inj_mask = (t > bl_time) & (t < inj_time)
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    s_baseline = sample['raw_reference'][bl_mask] if bl_mask.any() else sample['raw_reference'][:bl_time]
+    s_baseline = sample['raw_reference'][bl_mask] if bl_mask.any() else sample['raw_reference'][:int(bl_time)]
     ref_signal = sample['raw_reference'] - s_baseline.mean()
     min_response = ref_signal[response_mask].min() if response_mask.any() else ref_signal.min()
     max_abs_signal = np.abs(ref_signal).max()
@@ -517,7 +517,7 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_thresh
     """
     t = sample['time']
     bl_time = sample.get('baseline_duration_s', 45)
-    inj_time = sample['markers'].get('Injection', (bl_time + sample['contact_time_s']))
+    inj_time = sample['markers'].get('Injection', (bl_time + sample.get('contact_time_s', 25)))
     contact_mask = (t > bl_time) & (t <= inj_time)
     contact_std = signal[contact_mask].std() if contact_mask.any() else 0.0
     bind_resp = _get_binding_response(sample, signal)
@@ -576,7 +576,7 @@ def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_th
         rinse = markers.get('Rinse', t[-1])
 
         bl_mask = t <= bl_time
-        ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[:bl_time].mean()
+        ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[:int(bl_time)].mean()
 
         # 2-5 s after rinse: RI bulk gone, only true binding remains
         diss_mask = (t >= rinse + 2) & (t <= rinse + 5)
@@ -834,7 +834,7 @@ def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict =
     t = t[disso_mask]
     t0 = t[0]
     if channel != "signal":
-        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:bl_time].mean()
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:int(bl_time)].mean()
     else:
         signal, _ = double_reference(sample, blank)
     signal = signal[disso_mask]
@@ -842,7 +842,7 @@ def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict =
     try:
         popt, pcov = curve_fit(lambda t, kon: _disso_rate_equation(t, kon, R0, t0), xdata=t, ydata=signal, p0=[1], bounds=(0, 10))
     except Exception as e:
-        print(f"Warning! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
+        print(f"WARNING! Couldn't fit last dissociation of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
               f"Error: {e}")
         if debug:
             return t, signal, np.nan, np.nan, np.array([]), np.nan, R0, t0
@@ -870,7 +870,7 @@ def fit_last_asso(sample: dict = {}, channel: str = "signal", blank: dict = None
     bl_time = sample.get("baseline_duration_s", 45)
     bl_mask = t <= bl_time
     if channel != "signal":
-        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:bl_time].mean()
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:int(bl_time)].mean()
     else:
         signal, _ = double_reference(sample, blank)
     C = sample['concentration_M']
@@ -894,7 +894,7 @@ def fit_last_asso(sample: dict = {}, channel: str = "signal", blank: dict = None
             popt, pcov = curve_fit(lambda t, kon, koff: _asso_rate_equation(t, kon, koff, C, Req, t0), xdata=t, ydata=signal, p0=[1e3, 1], bounds=([1e2, 0], [1e9, 10]))
             koff = popt[1]
     except Exception as e:
-        print(f"Warning! Couldn't fit association pulses of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
+        print(f"WARNING! Couldn't fit association pulses of sample {sample['compound']} (cycle {sample['index']} - channel {sample['channel']}).\n"
               f"Error: {e}")
         koff = koff if koff else np.nan
         if debug:
