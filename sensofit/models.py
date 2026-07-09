@@ -139,8 +139,8 @@ def build_pulsed_concentration_profile(dmso_cycle: dict, C_analyte: float,
     sig = dmso_cycle['raw_active'].copy()
 
     # Baseline-subtract
-    inj_time = dmso_cycle['markers'].get('Injection', t[0])
-    baseline_mask = t < inj_time
+    bl_time = dmso_cycle.get('baseline_duration_s', 45)
+    baseline_mask = t <= bl_time
     if baseline_mask.any():
         sig -= sig[baseline_mask].mean()
 
@@ -192,12 +192,12 @@ def _is_dmso_cal_valid(dmso_cycle: dict, verbose=False) -> bool:
     """
     t = dmso_cycle['time']
     markers = dmso_cycle['markers']
-    bl_time = markers.get('Baseline', t[0])
+    bl_time = dmso_cycle.get('baseline_duration_s', 45)
     inj_time = markers.get('Injection', t[0])
     rinse_time = markers.get('Rinse', t[-1])
-    bl_mask = t < inj_time
+    bl_mask = t <= bl_time
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][np.isclose(t, bl_time)][0]
+    baseline = dmso_cycle['raw_active'][bl_mask].mean() if bl_mask.any() else dmso_cycle['raw_active'][:bl_time].mean()
     dmso_signal = dmso_cycle['raw_active'] - baseline
     baseline_std = dmso_signal[bl_mask].std() if bl_mask.any() else 0.0
     max_response = dmso_signal[response_mask].max() if response_mask.any() else dmso_signal.max()
@@ -244,12 +244,12 @@ def _is_blank_valid(blank: dict, verbose=False) -> bool:
     """
     t = blank['time']
     markers = blank['markers']
-    bl_time = markers.get('Baseline', t[0])
+    bl_time = blank.get('baseline_duration_s', 45)
     inj_time = markers.get('Injection', t[0])
     rinse_time = markers.get('Rinse', t[-1])
-    bl_mask = t < inj_time
+    bl_mask = t <= bl_time
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][np.isclose(t, bl_time)][0]
+    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][:bl_time].mean()
     blank_signal = blank['signal'] - baseline
     baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
     steady_state = blank_signal[-10:].mean()
@@ -284,21 +284,20 @@ def double_reference(sample: dict, blank: dict):
         Index of the blank used, or None if fallback (no blank subtraction).
     """
     t = sample['time']
-    inj_time = sample['markers'].get('Injection', t[0])
-    rinse_time = sample['markers'].get('Rinse', t[-1])
+    bl_time = sample.get('baseline_duration_s', 45)
     n = len(t)
 
     # Baseline-subtract sample
-    bl_mask = t < inj_time
-    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][0]
+    bl_mask = t <= bl_time
+    s_baseline = sample['signal'][bl_mask].mean() if bl_mask.any() else sample['signal'][:bl_time].mean()
     s_bl = sample['signal'] - s_baseline
 
     if blank:
         # Baseline-subtract blank
         n_b = len(blank['signal'])
         n_min = min(n, n_b)
-        bl_mask_b = t[:n_min] < inj_time
-        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min][0]
+        bl_mask_b = t[:n_min] <= bl_time
+        b_baseline = blank['signal'][:n_min][bl_mask_b].mean() if bl_mask_b.any() else blank['signal'][:n_min].mean()
         b_bl = blank['signal'][:n_min] - b_baseline
         corrected_short = s_bl[:n_min] - b_bl
 
@@ -359,7 +358,7 @@ def _get_binding_response(sample: dict, signal: np.ndarray):
     return bind_resp if bind_resp >= 0 else 0.0  # Return 0.0 if negative response detected
 
 
-def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0):
+def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float = 10):
     """Detect noisy baseline in a sample cycle.
 
     Parameters
@@ -370,63 +369,66 @@ def is_baseline_noisy(sample: dict, signal: np.ndarray, percent_threshold: float
         Double-referenced (or baseline-subtracted) signal from sample.
     percent_threshold : float
         Threshold for the standard deviation of the signal above which it is considered noisy. 
-        Default 5.0% of the maximum abs(signal) value.
+        Default 10.0% of the maximum abs(signal) value.
 
     Returns
     -------
     noisy : bool
-        True if the baseline is noisy.
+        True if baseline_std > percent_threshold * max_abs_signal / 100.
     baseline_std : float
         Standard deviation of the double-referenced signal, used for assessment.
     """
     t = sample['time']
-    inj_time = sample['markers'].get('Injection', t[0])
-    bl_mask = t < inj_time
+    bl_time = sample.get('baseline_duration_s', 45)
+    bl_mask = t <= bl_time
     baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
     return baseline_std > (percent_threshold / 100.0) * np.max(np.abs(signal)), baseline_std
 
 
-def has_injection_error(sample: dict, threshold: float = 2.5, time_window: float = 25.0):
-    """Detect injection errors in a sample cycle.
+def has_injection_issue(sample: dict, percent_threshold: float = 15.0):
+    """Detect injection issues in a sample cycle.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    threshold : float
-        Threshold for the absolute value of the signal before injection 
-        above which it is considered an injection error. 
-        Default 2.5 times the baseline std value.
-    time_window : float
-        The duration (in seconds) of the time window before the injection 
-        to consider for error detection and to use for baseline std calculation 
-        (if baseline mask cannot be generated). Default 25.0 seconds.
-
+    percent_threshold : float
+        Threshold for maximum abs(delta) value between the baseline_mean and injection_mean 
+        for either reference or active channel, above which there is probably an injection issue.
+        Default 15.0% of maximum signal value.
+    
     Returns
     -------
-    error : bool
-        True if - threshold > signal before injection > threshold for both reference 
-        and active channels.
-    inj_signal : tuple
-        Minimum and maximum signal before injection for both reference and active channels, 
-        used for error assessment.
+    inj_issue : bool
+        True if abs(delta) > percent_threshold * max_signal for either reference.
+    deltas : tuple
+        Delta values between baseline and injection responses for reference and 
+        active channels, used for error assessment.
     """
     t = sample['time']
+    bl_time = sample.get('baseline_duration_s', 45)
     inj_time = sample['markers'].get('Injection', t[0])
-    inj_mask = (t > inj_time - time_window) & (t <= inj_time)
-    bl_mask = t <= inj_time
-    ref_bl = sample["raw_reference"][bl_mask] if bl_mask.any() else sample["raw_reference"][:time_window]
-    active_bl = sample["raw_active"][bl_mask] if bl_mask.any() else sample["raw_active"][:time_window]
-    ref = sample["raw_reference"] - ref_bl.mean()
-    active = sample["raw_active"] - active_bl.mean()
-    threshold_ref = threshold * np.std(ref_bl)
-    threshold_active = threshold * np.std(active_bl)
-    error = np.any(ref[inj_mask] < -threshold_ref) or np.any(ref[inj_mask] > threshold_ref) or np.any(active[inj_mask] < -threshold_active) or np.any(active[inj_mask] > threshold_active)
-    return error, (ref[inj_mask].min() if inj_mask.any() else ref.min(), ref[inj_mask].max() if inj_mask.any() else ref.max(), active[inj_mask].min() if inj_mask.any() else active.min(), active[inj_mask].max() if inj_mask.any() else active.max())
+    bl_mask = t <= bl_time
+    inj_mask = (t > bl_time) & (t < inj_time)
+
+    ref_bl_mean = sample["raw_reference"][bl_mask].mean() if bl_mask.any() else sample["raw_reference"][:bl_time].mean()
+    ref_bl = sample['raw_reference'][bl_mask] - ref_bl_mean if bl_mask.any() else sample['raw_reference'][:bl_time] - ref_bl_mean
+    ref_inj = sample["raw_reference"][inj_mask] - ref_bl_mean if inj_mask.any() else sample["raw_reference"][bl_time:inj_time] - ref_bl_mean
+    ref_max = np.abs(sample['raw_reference'] - ref_bl_mean).max()
+
+    active_bl_mean = sample["raw_active"][bl_mask].mean() if bl_mask.any() else sample["raw_active"][:bl_time].mean()
+    active_bl = sample['raw_active'][bl_mask] - active_bl_mean if bl_mask.any() else sample['raw_active'][:bl_time] - active_bl_mean
+    active_inj = sample["raw_active"][inj_mask] - active_bl_mean if inj_mask.any() else sample["raw_active"][bl_time:inj_time] - active_bl_mean
+    active_max = np.abs(sample['raw_active'] - active_bl_mean).max()
+
+    delta_ref = np.abs(ref_bl.mean() - ref_inj.mean())
+    delta_active = np.abs(active_bl.mean() - active_inj.mean())
+    inj_issue = (delta_ref >= percent_threshold * ref_max / 100) or (delta_active >= percent_threshold * active_max / 100)
+    return inj_issue, (delta_ref, delta_active)
 
 
-def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
-    """Detect negative signal in reference channel, 
+def is_reference_response_negative(sample: dict, percent_threshold: float = 10.0):
+    """Detect negative response in reference channel, 
     which will affect signal interpretation.
     
     Parameters
@@ -434,31 +436,34 @@ def is_reference_signal_negative(sample: dict, percent_threshold: float = 5.0):
     sample : dict
         Sample cycle from load_cxw().
     percent_threshold : float
-        Threshold for the baseline-subtracted signal in the raw_reference channel 
-        below which it is considered too negative. 
-        Default 5.0% of min(signal).
+        Threshold for the negative response in the reference channel.
+        Default 10.0% times of -max_abs_signal.
 
     Returns
     -------
     negative : bool
-        True if signal in raw_reference channel < threshold.
+        True if min(reference_response) < injection_mean - (percent_threshold / 100.0 * max_abs_signal).
     min_ref : float
         Minimum value of the raw_reference signal, used for assessment.
     """
     t = sample['time']
+    bl_time = sample.get('baseline_duration_s', 45)
     inj_time = sample['markers'].get('Injection', t[0])
     rinse_time = sample['markers'].get('Rinse', t[-1])
-    bl_mask = t < inj_time
-    signal_mask = (t >= inj_time) & (t <= rinse_time)
-    s_baseline = sample['raw_reference'][bl_mask].mean() if bl_mask.any() else sample['raw_reference'][0]
-    ref_signal = sample['raw_reference'] - s_baseline
-    min_ref = ref_signal[signal_mask].min() if signal_mask.any() else ref_signal.min()
-    return min_ref < -((percent_threshold / 100.0) * np.max(np.abs(ref_signal))), min_ref
+    bl_mask = t <= bl_time
+    inj_mask = (t > bl_time) & (t < inj_time)
+    response_mask = (t >= inj_time) & (t <= rinse_time)
+    s_baseline = sample['raw_reference'][bl_mask] if bl_mask.any() else sample['raw_reference'][:bl_time]
+    ref_signal = sample['raw_reference'] - s_baseline.mean()
+    min_response = ref_signal[response_mask].min() if response_mask.any() else ref_signal.min()
+    max_abs_signal = np.abs(ref_signal).max()
+    ref_inj_mean = ref_signal[inj_mask].mean() if inj_mask.any() else ref_signal[0]
+    return min_response < ref_inj_mean - (percent_threshold / 100.0 * max_abs_signal), ref_inj_mean
 
 
-def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: float = 5.0, time_window: float = 10.0):
+def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0, time_window: float = 10.0):
     """Detect sample carryover at the end of the cycle.
-    Get the mean of the baseline-subtracted signal in the last 10 seconds of the cycle, 
+    Get the mean of the baseline-subtracted signal in the last X seconds of the cycle, 
     and if it is above the threshold, there is probably carryover.
 
     Parameters
@@ -469,7 +474,7 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: 
         Double-referenced (or baseline-subtracted) signal from sample.
     percent_threshold : float
         Threshold for the signal at the end of the cycle above which there is probably carryover. 
-        Default 5.0% of the maximum abs(signal) value.
+        Default 10.0% of the maximum abs(signal) value.
     time_window : float
         The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. 
         Default 10.0.
@@ -488,7 +493,7 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: 
     return end_signal > ((percent_threshold / 100.0) * np.max(np.abs(signal))), end_signal
 
 
-def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_threshold: float = 5.0):
+def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_threshold: float = 50.0):
     """Detect low signal-to-noise response in sensorgram.
 
     Parameters
@@ -499,8 +504,8 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_thresh
         Double-referenced (or baseline-subtracted) signal from sample.
     snr_threshold: float
         Threshold of the signal to noise ratio between the binding response 
-        and the noise (`snr = bind_resp/noise`).
-        Default 5.0.
+        and the noise (`snr = bind_resp/contact_std`).
+        Default 50.0.
 
     Returns
     -------
@@ -511,11 +516,12 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_thresh
         Binding response (pg/mm²), used for assessment.
     """
     t = sample['time']
-    inj_time = sample['markers'].get('Injection', t[0])
-    bl_mask = t < inj_time
-    baseline_std = signal[bl_mask].std() if bl_mask.any() else 0.0
+    bl_time = sample.get('baseline_duration_s', 45)
+    inj_time = sample['markers'].get('Injection', (bl_time + sample['contact_time_s']))
+    contact_mask = (t > bl_time) & (t <= inj_time)
+    contact_std = signal[contact_mask].std() if contact_mask.any() else 0.0
     bind_resp = _get_binding_response(sample, signal)
-    return (bind_resp/baseline_std) <= snr_threshold if baseline_std != 0.0 else False, bind_resp
+    return (bind_resp / contact_std) <= snr_threshold if contact_std != 0.0 else False, bind_resp
 
 
 def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_threshold: float = 5.0):
@@ -534,6 +540,7 @@ def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_th
         Sample cycle from load_cxw().
     koff_threshold : float
         Threshold for the dissociation constant of the reference channel.
+        Default 1.25 s⁻¹.
      percent_threshold : float
         Threshold for the baseline-subtracted signal in the raw_reference channel 
         above which the sample is classified as a non-specific binder (in case 
@@ -543,9 +550,15 @@ def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_th
     Returns
     -------
     nsb : bool
-        True if the koff_ref < koff_active or koff_ref <= koff_threshold.
+        True if the koff_ref < koff_active OR koff_ref <= koff_threshold.
     koffs : tuple
         Fitted dissociation constants for the reference and active channels.
+    OR
+    nsb : bool
+        True if ref_disso > ((percent_threshold / 100.0) * max_ref_signal).
+    ref_disso : float
+        Baseline-subtracted raw_reference signal 2-5 s into the dissociation phase, 
+        used for assessment if fitting fails.
     """
     try:
         koff_ref, _, _, _ = fit_last_disso(sample, channel="raw_reference")
@@ -559,19 +572,20 @@ def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_th
         t = sample['time']
         ref = sample['raw_reference']
         markers = sample['markers']
-        inj = markers.get('Injection', t[0])
+        bl_time = sample.get('baseline_duration_s', 45)
         rinse = markers.get('Rinse', t[-1])
 
-        bl_mask = t < inj
-        ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[0]
+        bl_mask = t <= bl_time
+        ref_bl = ref[bl_mask].mean() if bl_mask.any() else ref[:bl_time].mean()
 
         # 2-5 s after rinse: RI bulk gone, only true binding remains
         diss_mask = (t >= rinse + 2) & (t <= rinse + 5)
         if not diss_mask.any():
             return False, 0.0
 
-        ref_dissoc = float((ref[diss_mask] - ref_bl).mean())
-        return ref_dissoc > ((percent_threshold / 100.0) * np.max(np.abs(ref - ref_bl))), ref_dissoc
+        ref_disso = float((ref[diss_mask] - ref_bl).mean())
+        max_ref_signal = np.max(np.abs(ref - ref_bl))
+        return ref_disso > ((percent_threshold / 100.0) * max_ref_signal), ref_disso
 
 
 # ---------------------------------------------------------------------------
@@ -600,17 +614,18 @@ def build_pulse_mask(dmso_cycle: dict, threshold_frac: float = 0.3):
     """
     t = dmso_cycle['time']
     ref = dmso_cycle['raw_reference']
+    bl_time = dmso_cycle.get('baseline_duration_s', 45)
     inj_time = dmso_cycle['markers'].get('Injection', t[0])
     rinse_time = dmso_cycle['markers'].get('Rinse', t[-1])
 
-    baseline = ref[t < inj_time].mean()
-    inj_mask = (t >= inj_time) & (t <= rinse_time)
-    peak = ref[inj_mask].max() if inj_mask.any() else baseline
+    baseline = ref[t <= bl_time].mean()
+    pulse_mask = (t >= inj_time) & (t <= rinse_time)
+    peak = ref[pulse_mask].max() if pulse_mask.any() else baseline
     threshold = baseline + threshold_frac * (peak - baseline)
 
     is_buffer = np.ones(len(t), dtype=bool)
     # During injection window, mark analyte pulses
-    is_buffer[inj_mask & (ref > threshold)] = False
+    is_buffer[pulse_mask & (ref > threshold)] = False
     return is_buffer
 
 
@@ -812,14 +827,14 @@ def _disso_rate_equation(t, koff, R0, t0):
 
 def fit_last_disso(sample: dict = {}, channel: str = "raw_active", blank: dict = None, debug=False):
     t = sample["time"]
-    t_inj = sample["markers"].get("Injection")
+    bl_time = sample.get("baseline_duration_s", 45)
     t_rinse = sample["markers"].get("Rinse")
-    bl_mask = t < t_inj
+    bl_mask = t <= bl_time
     disso_mask = t > t_rinse
     t = t[disso_mask]
     t0 = t[0]
     if channel != "signal":
-        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][0]
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:bl_time].mean()
     else:
         signal, _ = double_reference(sample, blank)
     signal = signal[disso_mask]
@@ -849,10 +864,15 @@ def _asso_rate_equation(t, kon, koff, C, Req, t0):
     return Req * (1 - np.exp(-(kon * C + koff) * (t-t0)))
     
 
-def fit_last_asso(sample: dict = {}, blank: dict = None, koff: float = 0.0, debug=False):
+def fit_last_asso(sample: dict = {}, channel: str = "signal", blank: dict = None, koff: float = 0.0, debug=False):
     from scipy.optimize import curve_fit
     t = sample["time"]
-    signal, _ = double_reference(sample, blank)
+    bl_time = sample.get("baseline_duration_s", 45)
+    bl_mask = t <= bl_time
+    if channel != "signal":
+        signal = sample[channel] - sample[channel][bl_mask].mean() if bl_mask.any() else sample[channel] - sample[channel][:bl_time].mean()
+    else:
+        signal, _ = double_reference(sample, blank)
     C = sample['concentration_M']
     t_inj = sample['markers'].get('Injection')
     t0 = t_inj

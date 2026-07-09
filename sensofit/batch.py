@@ -15,7 +15,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 from .data_loader import load_cxw
 from .package_loader import load_experiment
-from .models import (is_baseline_noisy, has_injection_error, is_reference_signal_negative,
+from .models import (is_baseline_noisy, has_injection_issue, is_reference_response_negative,
                      is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
                      double_reference, select_blank, select_dmso_cal, get_weight_from_derivative)
 from .direct_kinetics import fit_sample as dk_fit_sample
@@ -128,9 +128,8 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
 
     # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blank=blank)
-    if "negative_signal_in_reference_channel" in heuristics or "low_signal_to_noise_response" in heuristics:
+    if "negative_response_in_reference_channel" in heuristics or "low_signal_to_noise_response" in heuristics:
         row = _fallback_row(sample, mode)
-        row['no_binding'] = True
         row['binding'] = False
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
@@ -148,7 +147,6 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             kwargs['n_starts'] = n_starts
         result = fit_func(sample, dmso, **kwargs)
         row = _extract_row(sample, result, mode)
-        row['no_binding'] = False
         row['binding'] = True
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
@@ -157,7 +155,6 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['error'] = np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
-        row['no_binding'] = True
         row['binding'] = False
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
@@ -270,12 +267,12 @@ def sensorgram_heuristics(sample, blank=None):
     noisy, _ = is_baseline_noisy(sample, signal)
     if noisy:
         heuristics.append('noisy')
-    inj_error, _ = has_injection_error(sample)
+    inj_error, _ = has_injection_issue(sample)
     if inj_error:
         heuristics.append('injection_issue')
-    neg_ref, _ = is_reference_signal_negative(sample)
+    neg_ref, _ = is_reference_response_negative(sample)
     if neg_ref:
-        heuristics.append('negative_signal_in_reference_channel')
+        heuristics.append('negative_response_in_reference_channel')
     low_snr, _ = has_low_signal_to_noise_reponse(sample, signal)
     if low_snr:
         heuristics.append('low_signal_to_noise_response')
