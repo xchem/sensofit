@@ -316,7 +316,7 @@ def main(argv=None):
     # Reorder columns: source_file, cycle_index, compound first
     priority = ['source_file', 'rk_serie_id', 'cycle_index', 'channel',
                 'compound_type', 'compound', 'concentration_M', 'concentration_uM',
-                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'sqrt_chi2', 'sigma_res',
+                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'rmse', 'sigma_res',
                 'binding', 'non_specific', 'noisy', 'injection_issue', 'carryover',
                 'success', 'error', 'flag', 'flag_reason']
     ordered = [c for c in priority if c in combined.columns]

@@ -18,7 +18,7 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 
 import numpy as np
 from .models import (build_concentration_profile, simulate_sensorgram,
-                     smooth_and_differentiate, double_reference)
+                     smooth_and_differentiate, double_reference, get_rmse)
 
 
 def direct_kinetics_fit(t, R_smooth, dRdt, c, w=None, lambda_reg=0.0):
@@ -195,6 +195,8 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0,
     # Simulate fitted sensorgram for plotting
     R_fit = simulate_sensorgram(t, ka, kd, Rmax,
                                 c_func, R0=R0)
+    fit_mask = np.isfinite(R_fit)
+    rmse = get_rmse(signal_bl[fit_mask], R_fit[fit_mask])
 
     result['ka'] = ka
     result['kd'] = kd
@@ -202,7 +204,7 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0,
     result['KD'] = KD
     result['Rmax_corrected'] = Rmax
     result['R0_dissoc'] = R0
-
+    result['rmse'] = rmse
     result['c_func'] = c_func
     result['c_raw'] = c_raw
     result['R_fit'] = R_fit

@@ -16,7 +16,7 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 import numpy as np
 from scipy.optimize import least_squares
 from .models import (build_pulsed_concentration_profile, double_reference, build_full_weight_mask, 
-                     simulate_sensorgram, trim_to_fit_window, fit_last_disso, fit_last_asso)
+                     simulate_sensorgram, trim_to_fit_window, fit_last_disso, fit_last_asso, get_rmse)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
 
@@ -165,10 +165,12 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     if not fits:
         # Fallback: use derived estimates
         R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func, R0=0.0)
+        fit_mask = np.isfinite(R_fit)
+        rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
         return {
             'ka': ka_est, 'kd': kd_final, 'Rmax': Rmax_est,
             'KD': kd_final / ka_est,
-            'sqrt_chi2': np.nan,
+            'rmse': np.nan,
             'R0': R0_est, 'Rss': Rss_est,
             'ka_se': np.nan, 'kd_se': np.nan, 'Rmax_se': np.nan,
             'cov': np.full((3, 3), np.nan),
@@ -221,15 +223,15 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
     R_fit = simulate_sensorgram(t, ka_final_val, kd_final_val, Rmax_final,
                                 c_func, R0=0.0)
-
-    sqrt_chi2 = _chi2(residuals=residuals, n_params=len(params), w=w, sqrt=True)
+    fit_mask = np.isfinite(R_fit)
+    rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
 
     return {
         'ka': ka_final_val,
         'kd': kd_final_val,
         'Rmax': Rmax_final,
         'KD': KD,
-        'sqrt_chi2': sqrt_chi2,
+        'rmse': rmse,
         'R0': R0_est,
         'Rss': Rss_est,
         'ka_se': ka_se,

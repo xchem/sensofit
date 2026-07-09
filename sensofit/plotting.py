@@ -69,7 +69,7 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
     kd = result.get('kd', np.nan)
     KD = result.get('KD', np.nan)
     Rmax = result.get('Rmax', np.nan)
-    sqrt_chi2 = result.get('sqrt_chi2', np.nan)
+    rmse = result.get('rmse', np.nan)
 
     info_lines = [
         f'ka  = {ka:.3e} M⁻¹s⁻¹',
@@ -77,8 +77,8 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         f'KD  = {KD:.3e} M',
         f'Rmax = {Rmax:.2f} pg/mm²',
     ]
-    if np.isfinite(sqrt_chi2):
-        info_lines.append(f'sqrt(chi2) = {sqrt_chi2:.3f}')
+    if np.isfinite(rmse):
+        info_lines.append(f'RMSE = {rmse:.3f}')
 
     info_text = '\n'.join(info_lines)
     ax.text(0.02, 0.98, info_text,
@@ -141,11 +141,11 @@ def _save_fit_process(i, row, results, samples, mode, output_dir):
         return None
     sample = match_sample[0]
     match_result = [r for r in results if r is not None
-                    and r.get('ka') == row.get('ka')
-                    and r.get('kd') == row.get('kd')
-                    and r.get('KD') == row.get('KD')
-                    and r.get('Rmax') == row.get('Rmax')
-                    and r.get('sigma_residual') == row.get('sigma_res')]
+                    and r.get('ka') == row.get('ka', np.nan)
+                    and r.get('kd') == row.get('kd', np.nan)
+                    and r.get('KD') == row.get('KD', np.nan)
+                    and r.get('Rmax') == row.get('Rmax', np.nan)
+                    and r.get('rmse') == row.get('rmse', np.nan)]
     if len(match_result) > 1:
         print(f'WARNING! Multiple results with same parameters for cycle {idx}, channel {ch}, RK serie {rk_serie}, using only the first match for plotting.')
     elif len(match_result) == 0:
