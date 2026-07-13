@@ -14,7 +14,6 @@ Where:
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline
-from scipy.integrate import solve_ivp
 from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
 
@@ -924,7 +923,13 @@ def langmuir_ode(t, R, ka, kd, Rmax, c_func):
 
 def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
                         c_func, R0: float = 0.0) -> np.ndarray:
-    """Simulate a 1:1 Langmuir sensorgram via ODE integration.
+    """Simulate a 1:1 Langmuir sensorgram with exponential propagation.
+
+    Concentration is evaluated at the midpoint of each measured time
+    interval and treated as constant within that interval.  The scalar
+    Langmuir ODE then has an exact exponential solution.  This is a stable,
+    second-order midpoint approximation for varying ``c(t)`` and avoids the
+    large overhead of an adaptive general-purpose ODE solver during fitting.
 
     Parameters
     ----------
@@ -942,15 +947,28 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
     R : np.ndarray
         Simulated binding response at each time point.
     """
-    sol = solve_ivp(
-        langmuir_ode,
-        t_span=(t[0], t[-1]),
-        y0=[R0],
-        t_eval=t,
-        args=(ka, kd, Rmax, c_func),
-        method='RK45',
-        rtol=1e-8,
-        atol=1e-10,
-        max_step=0.5,
+    t = np.asarray(t, dtype=float)
+    R = np.empty_like(t)
+    if len(t) == 0:
+        return R
+
+    R[0] = R0
+    if len(t) == 1:
+        return R
+
+    dt = np.diff(t)
+    c_mid = np.asarray(c_func(t[:-1] + 0.5 * dt), dtype=float)
+    c_mid = np.broadcast_to(c_mid, dt.shape)
+    rate = ka * c_mid + kd
+    decay = np.exp(-rate * dt)
+    R_eq = np.divide(
+        ka * c_mid * Rmax,
+        rate,
+        out=np.zeros_like(rate),
+        where=rate != 0,
     )
-    return sol.y[0]
+
+    for i in range(1, len(t)):
+        R[i] = R_eq[i - 1] + (R[i - 1] - R_eq[i - 1]) * decay[i - 1]
+
+    return R

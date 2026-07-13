@@ -146,6 +146,18 @@ class TestSmoothing:
 
 
 class TestSimulation:
+    def test_constant_concentration_matches_exact_solution(self):
+        t = np.array([0.0, 0.1, 0.4, 1.0, 2.0])
+        ka, kd, Rmax, concentration = 1e4, 0.05, 100.0, 2e-5
+        c_func = lambda x: np.full_like(np.asarray(x, dtype=float), concentration)
+
+        result = simulate_sensorgram(t, ka, kd, Rmax, c_func)
+
+        rate = ka * concentration + kd
+        equilibrium = ka * concentration * Rmax / rate
+        expected = equilibrium * (1.0 - np.exp(-rate * t))
+        np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+
     def test_simulate_returns_array(self, dmso, sample):
         c_func, _ = build_concentration_profile(dmso, sample['concentration_M'])
         t = sample['time']

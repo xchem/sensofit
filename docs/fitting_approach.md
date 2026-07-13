@@ -249,8 +249,12 @@ $$
 \min_{k_a, k_d, R_{max}} \sum_i w_i \cdot \left( R_i^{obs} - R_i^{sim}(k_a, k_d, R_{max}) \right)^2
 $$
 
-where $R^{sim}$ is obtained by integrating the Langmuir ODE with pulsed c(t)
-using `scipy.integrate.solve_ivp` (RK45, rtol=1e-8).
+where $R^{sim}$ is obtained by propagating the Langmuir ODE with pulsed
+$c(t)$. Concentration is evaluated at the midpoint of each measured time
+interval and held constant within that interval, for which the scalar
+Langmuir ODE has an exact exponential solution. This gives a stable,
+second-order update without an adaptive solver inside every residual
+evaluation.
 
 **Multi-start protocol** (controlled by `n_starts`, default 3):
 - Start 1: Phase 2 estimates (ka, kd from DK, Rmax)
