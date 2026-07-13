@@ -5,6 +5,7 @@ import os
 import tempfile
 import pytest
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -33,6 +34,43 @@ def dk_result(sample, data):
 
 
 class TestPlotFit:
+    def test_model_trace_is_labelled_fit(self):
+        t = np.array([0.0, 1.0])
+        result = {
+            't': t, 'signal': t, 'R_fit': t,
+            'ka': 1.0, 'kd': 1.0, 'KD': 1.0, 'Rmax': 1.0,
+        }
+        sample = {'compound': 'test', 'concentration_M': 1e-6}
+
+        fig = plot_fit(result, sample)
+        labels = fig.axes[0].get_legend_handles_labels()[1]
+
+        assert 'Fit' in labels
+        assert 'ODE fit' not in labels
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+    def test_failed_fit_is_clearly_labelled(self):
+        t = np.array([0.0, 1.0])
+        result = {
+            't': t, 'signal': t, 'R_fit': t,
+            'ka': 1.0, 'kd': 1.0, 'KD': 1.0, 'Rmax': 1.0,
+            'sqrt_chi2': 0.5, 'success': False,
+        }
+        sample = {'compound': 'test', 'concentration_M': 1e-6}
+
+        fig = plot_fit(result, sample)
+        ax = fig.axes[0]
+        labels = ax.get_legend_handles_labels()[1]
+        text = '\n'.join(item.get_text() for item in ax.texts)
+
+        assert 'Fallback estimate' in labels
+        assert 'Fit' not in labels
+        assert 'FIT FAILED' in text
+        assert 'sqrt(chi2)' not in text
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
     def test_returns_figure(self, dk_result, sample):
         fig = plot_fit(dk_result, sample)
         assert fig is not None
@@ -50,7 +88,12 @@ class TestPlotFit:
 class TestSaveFitPlots:
     def test_saves_pngs(self, dk_result, sample):
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = save_fit_plots([dk_result], [sample], tmpdir, mode='dk')
+            df = pd.DataFrame([{
+                'cycle_index': sample['index'],
+                'channel': sample.get('channel', ''),
+                'rk_serie_id': sample.get('rk_serie_id', ''),
+            }])
+            paths = save_fit_plots(df, [sample], [dk_result], tmpdir, mode='dk')
             assert len(paths) == 1
             assert paths[0] is not None
             assert os.path.isfile(paths[0])
@@ -58,8 +101,35 @@ class TestSaveFitPlots:
 
     def test_skips_none_results(self, sample):
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = save_fit_plots([None], [sample], tmpdir)
+            df = pd.DataFrame([{
+                'cycle_index': sample['index'],
+                'channel': sample.get('channel', ''),
+                'rk_serie_id': sample.get('rk_serie_id', ''),
+            }])
+            paths = save_fit_plots(df, [sample], [None], tmpdir)
             assert paths == [None]
+
+    def test_saves_failed_fit_with_nan_residual(self):
+        t = np.array([0.0, 1.0])
+        sample = {
+            'index': 22, 'channel': 'FC2-FC1', 'rk_serie_id': 1,
+            'compound': 'test', 'concentration_M': 1e-6,
+        }
+        result = {
+            't': t, 'signal': t, 'R_fit': t,
+            'ka': 1.0, 'kd': 1.0, 'KD': 1.0, 'Rmax': 1.0,
+            'sigma_residual': np.nan, 'success': False,
+        }
+        df = pd.DataFrame([{
+            'cycle_index': 22, 'channel': 'FC2-FC1', 'rk_serie_id': 1,
+            'sigma_res': np.nan, 'success': False,
+        }])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = save_fit_plots(df, [sample], [result], tmpdir)
+
+            assert paths[0] is not None
+            assert os.path.isfile(paths[0])
 
 
 class TestSanitiseFilename:

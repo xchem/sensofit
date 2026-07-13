@@ -41,11 +41,14 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
 
     # Model fit trace
     R_fit = result.get('R_fit')
+    fit_failed = result.get('success') is False
     if R_fit is not None:
         # ODE mode: R_fit has NaN outside fit window
         mask = np.isfinite(R_fit)
-        ax.plot(t[mask], R_fit[mask], color='red' if mode == 'ode' else 'blue', linewidth=1.2,
-                linestyle='--', label='ODE fit' if mode == 'ode' else 'DK fit')
+        fit_color = 'orange' if fit_failed else ('red' if mode == 'ode' else 'blue')
+        fit_label = 'Fallback estimate' if fit_failed else 'Fit'
+        ax.plot(t[mask], R_fit[mask], color=fit_color, linewidth=1.2,
+                linestyle='--', label=fit_label)
     if 'R_smooth' in result:
         # DK mode: plot smoothed signal
         ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
@@ -77,7 +80,7 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         f'KD  = {KD:.3e} M',
         f'Rmax = {Rmax:.2f} pg/mm²',
     ]
-    if np.isfinite(rmse):
+    if not fit_failed and np.isfinite(rmse):
         info_lines.append(f'RMSE = {rmse:.3f}')
 
     info_text = '\n'.join(info_lines)
@@ -87,6 +90,14 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
             fontfamily='monospace',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat',
                       alpha=0.8))
+
+    if fit_failed:
+        ax.text(0.5, 0.98, 'FIT FAILED',
+                transform=ax.transAxes, fontsize=11, fontweight='bold',
+                color='white', horizontalalignment='center',
+                verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.35', facecolor='firebrick',
+                          edgecolor='firebrick', alpha=0.9))
 
     ax.grid(True, alpha=0.3)
 
@@ -133,25 +144,17 @@ def _save_fit_process(i, row, results, samples, mode, output_dir):
     idx = row.get('cycle_index')
     ch = row.get('channel', '')
     rk_serie = row.get('rk_serie_id', '')
-    match_sample = [s for s in samples if s['index'] == idx and s.get('channel', '') == ch and s.get('rk_serie_id', '') == rk_serie]
+    match_sample = [(sample_index, sample) for sample_index, sample in enumerate(samples)
+                    if sample['index'] == idx
+                    and sample.get('channel', '') == ch
+                    and sample.get('rk_serie_id', '') == rk_serie]
     if len(match_sample) > 1:
         print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
     elif len(match_sample) == 0:
         print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
-    sample = match_sample[0]
-    match_result = [r for r in results if r is not None
-                    and r.get('ka') == row.get('ka', np.nan)
-                    and r.get('kd') == row.get('kd', np.nan)
-                    and r.get('KD') == row.get('KD', np.nan)
-                    and r.get('Rmax') == row.get('Rmax', np.nan)
-                    and r.get('rmse') == row.get('rmse', np.nan)]
-    if len(match_result) > 1:
-        print(f'WARNING! Multiple results with same parameters for cycle {idx}, channel {ch}, RK serie {rk_serie}, using only the first match for plotting.')
-    elif len(match_result) == 0:
-        print(f'WARNING! No result found with same parameter values for cycle {idx}, channel {ch}, RK serie {rk_serie}, skipping plot.')
-        return None
-    result = match_result[0]
+    sample_index, sample = match_sample[0]
+    result = results[sample_index] if sample_index < len(results) else None
     compound = sample.get('compound', 'Unknown')
     channel = sample.get('channel', ch)
     idx = sample.get('index', idx)
