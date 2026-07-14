@@ -250,13 +250,14 @@ $$
 $$
 
 where $R^{sim}$ is obtained by propagating the Langmuir ODE with pulsed
-$c(t)$. Concentration is evaluated at the midpoint of each measured time
-interval and held constant within that interval, for which the scalar
-Langmuir ODE has an exact exponential solution. This gives a stable,
-second-order update without an adaptive solver inside every residual
-evaluation.
+$c(t)$. Each measured time interval is propagated as two half-intervals;
+concentration is evaluated at the midpoint of each half-interval and held
+constant there, for which the scalar Langmuir ODE has an exact exponential
+solution. This retains unconditional stability while improving the accuracy
+of the fast update around changing pulse concentrations, without an adaptive
+solver inside every residual evaluation.
 
-The exponential midpoint propagator is selected by default with
+The two-half-step exponential propagator is selected by default with
 `fast=True`. For comparison with the original implementation, pass
 `fast=False` to `ode_fitting.fit_sample`, `ode_fitting.ode_fit`, or
 `batch.batch_fit`; this restores the adaptive RK45 solver with the legacy
