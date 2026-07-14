@@ -256,6 +256,12 @@ Langmuir ODE has an exact exponential solution. This gives a stable,
 second-order update without an adaptive solver inside every residual
 evaluation.
 
+The exponential midpoint propagator is selected by default with
+`fast=True`. For comparison with the original implementation, pass
+`fast=False` to `ode_fitting.fit_sample`, `ode_fitting.ode_fit`, or
+`batch.batch_fit`; this restores the adaptive RK45 solver with the legacy
+tolerances and maximum step size.
+
 **Multi-start protocol** (controlled by `n_starts`, default 3):
 - Start 1: Phase 2 estimates (ka, kd from DK, Rmax)
 - Start 2: DK estimates directly

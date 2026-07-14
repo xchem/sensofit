@@ -34,16 +34,18 @@ def _residuals(params, t_dissoc, signal_dissoc, t0):
     return signal_dissoc - R_model
 
 
-def _residuals_full(params, t, signal, c_func, w):
+def _residuals_full(params, t, signal, c_func, w, fast=True):
     """Full ODE residuals (weighted).
 
     Optimises (ka, kd, Rmax) simultaneously.
     """
     ka, kd, Rmax = params
-    R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0)
+    R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0,
+                                fast=fast)
     return w * (signal - R_sim)
 
-def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params=None, t=None, c_func=None, sqrt=False):
+def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None,
+          params=None, t=None, c_func=None, sqrt=False, fast=True):
     """Calculate Chi2 from ODE residuals.
     
     Chi2 = sum((w * residuals)^2) / (N - n_params)
@@ -52,7 +54,8 @@ def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params
         if R_sim is not None:
             residuals = w * (signal - R_sim)
         else:
-            residuals = _residuals_full(params, t, signal, c_func, w)
+            residuals = _residuals_full(params, t, signal, c_func, w,
+                                        fast=fast)
 
     n_points = int((w > 0).sum()) if w is not None else len(residuals)    
     chi2 = np.sum(residuals**2)/(n_points - max(n_params, 1))
@@ -74,7 +77,7 @@ def _solve_R0_Rss(kd, t_dissoc, signal_dissoc, t0):
 
 
 def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
-            n_starts=1, rng_seed=None, skip_s=1.0):
+            n_starts=1, rng_seed=None, skip_s=1.0, fast=True):
     """Fit 1:1 Langmuir parameters via DK-seeded ODE refinement.
 
     Three-phase approach:
@@ -102,6 +105,9 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         Random seed for reproducibility.  None (default) = non-reproducible.
     skip_s : float
         Seconds to skip after rinse onset to avoid transport lag.
+    fast : bool
+        Use the exponential midpoint propagator when true (default), or the
+        legacy adaptive RK45 solver when false.
     """
     kd_final = max(kd0, 1e-5)  # kd pinned from DK
 
@@ -150,7 +156,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         try:
             opt = least_squares(
                 _residuals_full, p0,
-                args=(t, signal, c_func, w),
+                args=(t, signal, c_func, w, fast),
                 bounds=(lb_full, ub_full),
                 method='trf',
                 ftol=1e-6, xtol=1e-6, gtol=1e-6,
@@ -164,7 +170,8 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
     if not fits:
         # Fallback: use derived estimates
-        R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func, R0=0.0)
+        R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func,
+                                    R0=0.0, fast=fast)
         fit_mask = np.isfinite(R_fit)
         rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
         return {
@@ -180,7 +187,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
             'n_points': int((w > 0).sum()),
             'cost': np.nan, 'nfev': 0,
             'n_converged': 0, 'n_starts': n_starts,
-            'success': False, 'message': 'All ODE fits failed',
+            'success': False, 'message': 'All ODE fits failed', 'fast': fast,
         }
 
     # Median aggregation over converged ODE fits
@@ -206,7 +213,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     
     params = [ka_final_val, kd_final_val, Rmax_final]
     residuals = _residuals_full(
-        params, t, signal, c_func, w)
+        params, t, signal, c_func, w, fast=fast)
     n = int((w > 0).sum())
     dof = max(n - 3, 1)
     sigma2 = np.sum(residuals ** 2) / dof
@@ -222,7 +229,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         pass
 
     R_fit = simulate_sensorgram(t, ka_final_val, kd_final_val, Rmax_final,
-                                c_func, R0=0.0)
+                                c_func, R0=0.0, fast=fast)
     fit_mask = np.isfinite(R_fit)
     rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
 
@@ -251,11 +258,13 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         'nfev': total_nfev,
         'success': True,
         'message': f'{len(fits)}/{n_starts} ODE starts converged',
+        'fast': fast,
     }
 
 
 def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF',
-               smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
+               smoothing_factor=None, neg_ss_correction=False,
+               association_weight=0.0, n_starts=1, fast=True):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
@@ -277,6 +286,9 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
         steady-state response during last dissociation (Rinse → RinseEnd).
     n_starts : int
         Number of starting points for ODE multi-start refinement.
+    fast : bool
+        Use the exponential midpoint propagator when true (default), or the
+        legacy adaptive RK45 solver when false.
 
     Returns
     -------
@@ -342,7 +354,7 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
                   ka0=ka_seed, kd0=kd_seed, Rmax0=Rmax_seed,
-                  n_starts=n_starts)
+                  n_starts=n_starts, fast=fast)
 
     # Map R_fit back to full time grid
     R_fit_full = np.full_like(signal, np.nan)
@@ -368,5 +380,6 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
         ode['signal'] -= min_diss
     ode['dmso_index'] = dmso['index'] if dmso else None
     ode['blank_index'] = blank_index
+    ode['fast'] = fast
 
     return ode

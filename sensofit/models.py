@@ -14,6 +14,7 @@ Where:
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline
+from scipy.integrate import solve_ivp
 from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
 
@@ -922,14 +923,14 @@ def langmuir_ode(t, R, ka, kd, Rmax, c_func):
 
 
 def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
-                        c_func, R0: float = 0.0) -> np.ndarray:
-    """Simulate a 1:1 Langmuir sensorgram with exponential propagation.
+                        c_func, R0: float = 0.0,
+                        fast: bool = True) -> np.ndarray:
+    """Simulate a 1:1 Langmuir sensorgram.
 
-    Concentration is evaluated at the midpoint of each measured time
-    interval and treated as constant within that interval.  The scalar
-    Langmuir ODE then has an exact exponential solution.  This is a stable,
-    second-order midpoint approximation for varying ``c(t)`` and avoids the
-    large overhead of an adaptive general-purpose ODE solver during fitting.
+    When ``fast=True``, concentration is evaluated at the midpoint of each
+    measured time interval and treated as constant within that interval. The
+    scalar Langmuir ODE then has an exact exponential solution. When
+    ``fast=False``, the legacy adaptive RK45 integration path is used.
 
     Parameters
     ----------
@@ -941,6 +942,9 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
         c(t) → concentration (M).
     R0 : float
         Initial response at t[0].
+    fast : bool
+        Select the exponential midpoint propagator (default) or the slower
+        adaptive RK45 solver used by the original implementation.
 
     Returns
     -------
@@ -948,9 +952,24 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
         Simulated binding response at each time point.
     """
     t = np.asarray(t, dtype=float)
-    R = np.empty_like(t)
     if len(t) == 0:
-        return R
+        return np.empty_like(t)
+
+    if not fast:
+        sol = solve_ivp(
+            langmuir_ode,
+            t_span=(t[0], t[-1]),
+            y0=[R0],
+            t_eval=t,
+            args=(ka, kd, Rmax, c_func),
+            method='RK45',
+            rtol=1e-8,
+            atol=1e-10,
+            max_step=0.5,
+        )
+        return sol.y[0]
+
+    R = np.empty_like(t)
 
     R[0] = R0
     if len(t) == 1:
