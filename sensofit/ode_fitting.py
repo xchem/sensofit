@@ -106,8 +106,8 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     skip_s : float
         Seconds to skip after rinse onset to avoid transport lag.
     fast : bool
-        Use the exponential midpoint propagator when true (default), or the
-        legacy adaptive RK45 solver when false.
+        Use the stable two-half-step exponential propagator when true
+        (default), or the legacy adaptive RK45 solver when false.
     """
     kd_final = max(kd0, 1e-5)  # kd pinned from DK
 
@@ -287,8 +287,8 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
     n_starts : int
         Number of starting points for ODE multi-start refinement.
     fast : bool
-        Use the exponential midpoint propagator when true (default), or the
-        legacy adaptive RK45 solver when false.
+        Use the stable two-half-step exponential propagator when true
+        (default), or the legacy adaptive RK45 solver when false.
 
     Returns
     -------

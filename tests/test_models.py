@@ -169,6 +169,16 @@ class TestSimulation:
         expected = equilibrium * (1.0 - np.exp(-rate * t))
         np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
 
+    def test_fast_propagator_tracks_legacy_for_varying_concentration(self):
+        t = np.linspace(0.0, 20.0, 41)
+        c_func = lambda x: 2e-6 * (1.0 + 0.8 * np.sin(np.asarray(x) / 2.0))
+
+        fast = simulate_sensorgram(t, 2e5, 0.2, 100.0, c_func, fast=True)
+        legacy = simulate_sensorgram(t, 2e5, 0.2, 100.0, c_func,
+                                     fast=False)
+
+        np.testing.assert_allclose(fast, legacy, rtol=5e-4, atol=1e-3)
+
     def test_simulate_returns_array(self, dmso, sample):
         c_func, _ = build_concentration_profile(dmso, sample['concentration_M'])
         t = sample['time']

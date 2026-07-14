@@ -927,10 +927,13 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
                         fast: bool = True) -> np.ndarray:
     """Simulate a 1:1 Langmuir sensorgram.
 
-    When ``fast=True``, concentration is evaluated at the midpoint of each
-    measured time interval and treated as constant within that interval. The
-    scalar Langmuir ODE then has an exact exponential solution. When
-    ``fast=False``, the legacy adaptive RK45 integration path is used.
+    When ``fast=True``, each measured time interval is propagated as two
+    half-intervals.  Concentration is evaluated at the midpoint of each
+    half-interval and held constant there, so each update has an exact
+    exponential solution.  This is a stable, higher-accuracy approximation
+    for varying ``c(t)`` while avoiding the overhead of an adaptive solver
+    inside every residual evaluation.  When ``fast=False``, the legacy
+    adaptive RK45 integration path is used.
 
     Parameters
     ----------
@@ -943,8 +946,8 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
     R0 : float
         Initial response at t[0].
     fast : bool
-        Select the exponential midpoint propagator (default) or the slower
-        adaptive RK45 solver used by the original implementation.
+        Select the two half-step exponential propagator (default) or the
+        slower adaptive RK45 solver used by the original implementation.
 
     Returns
     -------
@@ -976,18 +979,47 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
         return R
 
     dt = np.diff(t)
-    c_mid = np.asarray(c_func(t[:-1] + 0.5 * dt), dtype=float)
-    c_mid = np.broadcast_to(c_mid, dt.shape)
-    rate = ka * c_mid + kd
-    decay = np.exp(-rate * dt)
-    R_eq = np.divide(
-        ka * c_mid * Rmax,
-        rate,
-        out=np.zeros_like(rate),
-        where=rate != 0,
+    half_dt = 0.5 * dt
+    # Two midpoint evaluations per measured interval retain the unconditional
+    # stability of the exponential update, but resolve changes in the pulsed
+    # concentration profile more accurately than one midpoint evaluation.
+    c_eval_t = np.concatenate((
+        t[:-1] + 0.25 * dt,
+        t[:-1] + 0.75 * dt,
+    ))
+    c_eval = np.asarray(c_func(c_eval_t), dtype=float)
+    if c_eval.ndim == 0:
+        c_eval = np.full(c_eval_t.shape, float(c_eval))
+    else:
+        c_eval = np.broadcast_to(c_eval, c_eval_t.shape)
+    c_first = c_eval[:len(dt)]
+    c_second = c_eval[len(dt):]
+
+    # Vectorise the interval coefficients.  Only the state recurrence itself
+    # has to remain serial; evaluating rates, equilibria, and exponentials in
+    # the Python loop would erase much of the fast-path benefit.
+    rate_first = ka * c_first + kd
+    rate_second = ka * c_second + kd
+    decay_first = np.exp(-rate_first * half_dt)
+    decay_second = np.exp(-rate_second * half_dt)
+    equilibrium_first = np.divide(
+        ka * c_first * Rmax,
+        rate_first,
+        out=np.zeros_like(rate_first),
+        where=rate_first != 0,
+    )
+    equilibrium_second = np.divide(
+        ka * c_second * Rmax,
+        rate_second,
+        out=np.zeros_like(rate_second),
+        where=rate_second != 0,
     )
 
     for i in range(1, len(t)):
-        R[i] = R_eq[i - 1] + (R[i - 1] - R_eq[i - 1]) * decay[i - 1]
+        j = i - 1
+        r_half = (equilibrium_first[j]
+                  + (R[i - 1] - equilibrium_first[j]) * decay_first[j])
+        R[i] = (equilibrium_second[j]
+                + (r_half - equilibrium_second[j]) * decay_second[j])
 
     return R
