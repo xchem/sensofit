@@ -236,7 +236,7 @@ def _run_last_disso_fit(argv):
                 results["koff_ratio_active/ref"].append(koff_active/koff_ref if koff_ref != 0 else np.inf)
                 results["binding_response"].append(bind_response)
             except Exception as e:
-                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s["channel"]}):\n"
+                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s['channel']}):\n"
                       f"{e}")
                 continue
         filepath = args.output+"/"+str(os.path.basename(f)).replace(".cxw", "_check.csv")
