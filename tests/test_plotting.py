@@ -12,7 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from sensofit.data_loader import load_cxw
 from sensofit.direct_kinetics import fit_sample as dk_fit_sample
 from sensofit.models import select_dmso_cal
-from sensofit.plotting import plot_fit, save_fit_plots, _sanitise_filename
+from sensofit.plotting import (
+    _find_selected_blank,
+    _sanitise_filename,
+    plot_fit,
+    save_fit_plots,
+)
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
                     '20250826_DENV-2 NS2B3 Binding Assay.cxw')
@@ -34,6 +39,52 @@ def dk_result(sample, data):
 
 
 class TestPlotFit:
+    def test_raw_channels_and_selected_blank_are_plotted(self):
+        t = np.arange(4, dtype=float)
+        sample = {
+            'compound': 'test',
+            'concentration_M': 1e-6,
+            'channel': 'FC2-FC1',
+            'baseline_duration_s': 1.0,
+            'time': t,
+            'raw_active': np.array([10.0, 12.0, 20.0, 22.0]),
+            'raw_reference': np.array([5.0, 6.0, 8.0, 9.0]),
+        }
+        blank = {
+            'index': 8,
+            'baseline_duration_s': 1.0,
+            'time': t,
+            'signal': np.array([1.0, 2.0, 3.0, 4.0]),
+        }
+        result = {
+            't': t,
+            'signal': np.array([0.0, 1.0, 2.0, 3.0]),
+            'R_fit': np.array([0.0, 1.0, 2.0, 3.0]),
+            'ka': 1.0,
+            'kd': 1.0,
+            'KD': 1.0,
+            'Rmax': 1.0,
+        }
+
+        fig = plot_fit(result, sample, blank=blank)
+        assert len(fig.axes) == 2
+        labels = fig.axes[0].get_legend_handles_labels()[1]
+        assert labels == ['Ref. channel', 'Active channel', 'Blank']
+        np.testing.assert_allclose(fig.axes[0].lines[0].get_ydata(), [-0.5, 0.5, 2.5, 3.5])
+        np.testing.assert_allclose(fig.axes[0].lines[1].get_ydata(), [-1.0, 1.0, 9.0, 11.0])
+        np.testing.assert_allclose(fig.axes[0].lines[2].get_ydata(), [-0.5, 0.5, 1.5, 2.5])
+
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+    def test_selected_blank_is_matched_to_sample_context(self):
+        sample = {'channel': 'FC2-FC1', 'rk_serie_id': 1}
+        result = {'blank_index': 8}
+        wrong_channel = {'index': 8, 'channel': 'FC3-FC1', 'rk_serie_id': 1}
+        selected = {'index': 8, 'channel': 'FC2-FC1', 'rk_serie_id': 1}
+
+        assert _find_selected_blank(result, sample, [wrong_channel, selected]) is selected
+
     def test_model_trace_is_labelled_fit(self):
         t = np.array([0.0, 1.0])
         result = {

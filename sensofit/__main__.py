@@ -90,7 +90,9 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_j
     samples = data['samples']
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
     paths = save_fit_plots(df, samples, results,
-                            plot_dir, mode=mode, n_parallel_jobs=n_parallel_jobs)
+                            plot_dir, mode=mode,
+                            n_parallel_jobs=n_parallel_jobs,
+                            blanks=data['blanks'])
     n_plots = sum(1 for p in paths if p is not None)
     print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 

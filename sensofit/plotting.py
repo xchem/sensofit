@@ -1,7 +1,9 @@
 """Plotting utilities for SensoFit kinetic fitting results.
 
 Generates individual data-vs-model PNG plots with an information box
-showing compound name, ka, kd, and KD values.
+showing compound name, ka, kd, and KD values.  When the selected blank
+cycle is supplied, the plot also shows the baseline-corrected raw active
+and reference channels alongside the blank used for double referencing.
 """
 
 import os
@@ -10,7 +12,7 @@ from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 
 
-def plot_fit(result, sample, mode='ode', ax=None, title=None):
+def plot_fit(result, sample, mode='ode', ax=None, title=None, blank=None):
     """Plot data vs model fit for a single sample.
 
     Parameters
@@ -23,18 +25,29 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
         If provided, plot on this axes. Otherwise create a new figure.
     title : str or None
         Override title. Default: compound name.
+    blank : dict or None
+        Blank cycle used for double referencing.  When provided, a second
+        panel is added showing baseline-corrected ``raw_active``,
+        ``raw_reference``, and blank ``signal`` traces.
 
     Returns
     -------
     fig : matplotlib.figure.Figure or None
         The figure, or None if *ax* was provided.
     """
-    t = result['t']
-    signal = result['signal']
+    t = np.asarray(result['t'])
+    signal = np.asarray(result['signal'])
 
     fig = None
     if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 5))
+        if blank is not None:
+            fig, axes = plt.subplots(1, 2, sharey=True, figsize=(14, 6))
+            raw_ax, ax = axes
+            _plot_raw_channels(raw_ax, sample, blank)
+        else:
+            # Keep the single-axis behaviour for callers that do not have
+            # the selected blank available (and for minimal result fixtures).
+            fig, ax = plt.subplots(figsize=(8, 5))
 
     # Data trace
     ax.plot(t, signal, color='black', linewidth=0.8, label='Sensorgram')
@@ -107,7 +120,63 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None):
     return fig
 
 
-def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs=None):
+def _baseline_corrected_trace(cycle, value_key):
+    """Return a cycle's time/value trace after baseline subtraction.
+
+    The loader normally supplies ``baseline_duration_s``.  Older exported
+    packages may not, so the Injection marker is used as a conservative
+    fallback.  The returned arrays are truncated to their common length.
+    """
+    time = np.asarray(cycle.get('time', []), dtype=float)
+    values = np.asarray(cycle.get(value_key, []), dtype=float)
+    n = min(time.size, values.size)
+    time = time[:n]
+    values = values[:n]
+    if n == 0:
+        return time, values
+
+    baseline_duration = cycle.get('baseline_duration_s')
+    try:
+        baseline_duration = float(baseline_duration)
+    except (TypeError, ValueError):
+        baseline_duration = np.nan
+    if not np.isfinite(baseline_duration):
+        baseline_duration = cycle.get('markers', {}).get('Injection', time[0])
+
+    baseline_mask = time <= baseline_duration
+    baseline = values[baseline_mask].mean() if baseline_mask.any() else values[0]
+    return time, values - baseline
+
+
+def _plot_raw_channels(ax, sample, blank):
+    """Plot the raw channels and selected blank used by a sample."""
+    t_ref, reference = _baseline_corrected_trace(sample, 'raw_reference')
+    t_active, active = _baseline_corrected_trace(sample, 'raw_active')
+    if t_ref.size:
+        ax.plot(t_ref, reference, color='blue', linewidth=0.8,
+                label='Ref. channel')
+    if t_active.size:
+        ax.plot(t_active, active, color='red', linewidth=0.8,
+                label='Active channel')
+
+    t_blank, blank_signal = _baseline_corrected_trace(blank, 'signal')
+    if t_blank.size:
+        ax.plot(t_blank, blank_signal, color='grey', linewidth=0.75,
+                label='Blank')
+
+    blank_index = blank.get('index')
+    blank_title = 'Raw channels and selected blank'
+    if blank_index is not None:
+        blank_title += f' (cycle {blank_index})'
+    ax.set_title(blank_title, fontsize=11)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Response (pg/mm²)')
+    ax.legend(loc='upper right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+
+def save_fit_plots(df, samples, results, output_dir, mode='ode',
+                   n_parallel_jobs=None, blanks=None):
     """Save individual fit plots as PNGs.
 
     Parameters
@@ -122,6 +191,9 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs
         Directory to write PNG files into (created if needed).
     mode : str
         Label for the fit mode ('ode' or 'dk').
+    blanks : list[dict] or None
+        Blank cycles from the same experiment.  The blank whose index is
+        stored in each fit result is passed to :func:`plot_fit`.
 
     Returns
     -------
@@ -132,14 +204,18 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode', n_parallel_jobs
     
     if n_parallel_jobs:
         paths = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
-            delayed(_save_fit_process)(i, row, results, samples, mode, output_dir) for i, row in df.iterrows())
+            delayed(_save_fit_process)(i, row, results, samples, mode,
+                                       output_dir, blanks)
+            for i, row in df.iterrows())
     else:
-        paths = [_save_fit_process(i, row, results, samples, mode, output_dir) for i, row in df.iterrows()]
+        paths = [_save_fit_process(i, row, results, samples, mode,
+                                   output_dir, blanks)
+                 for i, row in df.iterrows()]
 
     return paths
 
 
-def _save_fit_process(i, row, results, samples, mode, output_dir):
+def _save_fit_process(i, row, results, samples, mode, output_dir, blanks=None):
     """Helper for multiprocessing save_fit_plots."""
     idx = row.get('cycle_index')
     ch = row.get('channel', '')
@@ -171,13 +247,44 @@ def _save_fit_process(i, row, results, samples, mode, output_dir):
     if result is None:
         print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
-    fig = plot_fit(result, sample, mode=mode)
+    blank = _find_selected_blank(result, sample, blanks)
+    fig = plot_fit(
+        result,
+        sample,
+        mode=mode,
+        blank=blank,
+    )
     if fig is not None:
         fig.savefig(fpath, dpi=150, bbox_inches='tight')
         plt.close(fig)
         return fpath
     else:
         return None
+
+
+def _find_selected_blank(result, sample, blanks):
+    """Find the blank selected by fitting for the sample being plotted."""
+    if not blanks:
+        return None
+    blank_index = result.get('blank_index')
+    try:
+        blank_index_is_finite = bool(np.isfinite(blank_index))
+    except (TypeError, ValueError):
+        blank_index_is_finite = False
+    if blank_index is None or not blank_index_is_finite:
+        return None
+
+    candidates = [blank for blank in blanks
+                  if blank.get('index') == blank_index]
+    if not candidates:
+        return None
+
+    channel = sample.get('channel')
+    rk_serie_id = sample.get('rk_serie_id')
+    contextual = [blank for blank in candidates
+                  if blank.get('channel') == channel
+                  and blank.get('rk_serie_id') == rk_serie_id]
+    return contextual[0] if contextual else candidates[0]
     
 
 
