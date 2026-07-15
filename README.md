@@ -10,7 +10,7 @@ using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, foll
 
 - **`.cxw` parser** — reads ZIP/XML/HDF5 experiment files directly
 - **Direct Kinetics (DK)** — millisecond-scale linear fit from dR/dt vs R
-- **ODE fitting** — full 1:1 Langmuir ODE solved with `scipy.integrate.solve_ivp`
+- **ODE fitting** — full 1:1 Langmuir ODE propagated with a stable fast two-half-step exponential update
 - **Batch processing** — fit all samples in a file with one call
 - **Non-specific binder detection** — flags samples with reference channel retention
 - **Quality flags** — automatic detection of boundary hits, high residuals, failed fits

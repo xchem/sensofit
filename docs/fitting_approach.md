@@ -249,8 +249,19 @@ $$
 \min_{k_a, k_d, R_{max}} \sum_i w_i \cdot \left( R_i^{obs} - R_i^{sim}(k_a, k_d, R_{max}) \right)^2
 $$
 
-where $R^{sim}$ is obtained by integrating the Langmuir ODE with pulsed c(t)
-using `scipy.integrate.solve_ivp` (RK45, rtol=1e-8).
+where $R^{sim}$ is obtained by propagating the Langmuir ODE with pulsed
+$c(t)$. Each measured time interval is propagated as two half-intervals;
+concentration is evaluated at the midpoint of each half-interval and held
+constant there, for which the scalar Langmuir ODE has an exact exponential
+solution. This retains unconditional stability while improving the accuracy
+of the fast update around changing pulse concentrations, without an adaptive
+solver inside every residual evaluation.
+
+The two-half-step exponential propagator is selected by default with
+`fast=True`. For comparison with the original implementation, pass
+`fast=False` to `ode_fitting.fit_sample`, `ode_fitting.ode_fit`, or
+`batch.batch_fit`; this restores the adaptive RK45 solver with the legacy
+tolerances and maximum step size.
 
 **Multi-start protocol** (controlled by `n_starts`, default 3):
 - Start 1: Phase 2 estimates (ka, kd from DK, Rmax)

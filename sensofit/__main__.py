@@ -66,7 +66,8 @@ def _run_gui():
     from .gui import SensoFitApp
     SensoFitApp().run()
 
-def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_jobs=None):
+def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
+              n_parallel_jobs=None, fast=True):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -75,8 +76,9 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_j
     print(f'Mode: {mode.upper()}')
     print(f'{"=" * 60}')
 
-    df, data, results = batch_fit(filepath, mode=mode,channels=channels,
-                                  progress=True, n_starts=n_starts, n_parallel_jobs=n_parallel_jobs)
+    df, data, results = batch_fit(filepath, mode=mode, channels=channels,
+                                  progress=True, n_starts=n_starts,
+                                  n_parallel_jobs=n_parallel_jobs, fast=fast)
     if df.empty:
         return df
     
@@ -90,7 +92,9 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_j
     samples = data['samples']
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
     paths = save_fit_plots(df, samples, results,
-                            plot_dir, mode=mode, n_parallel_jobs=n_parallel_jobs)
+                            plot_dir, mode=mode,
+                            n_parallel_jobs=n_parallel_jobs,
+                            blanks=data['blanks'])
     n_plots = sum(1 for p in paths if p is not None)
     print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 
@@ -232,7 +236,7 @@ def _run_last_disso_fit(argv):
                 results["koff_ratio_active/ref"].append(koff_active/koff_ref if koff_ref != 0 else np.inf)
                 results["binding_response"].append(bind_response)
             except Exception as e:
-                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s["channel"]}):\n"
+                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s['channel']}):\n"
                       f"{e}")
                 continue
         filepath = args.output+"/"+str(os.path.basename(f)).replace(".cxw", "_check.csv")
@@ -282,6 +286,11 @@ def main(argv=None):
         help='Number of parallel jobs to run. Default: None (not using parallelization).',
     )
     parser.add_argument(
+        '--slow-ode', action='store_false', dest='fast',
+        help='Use the legacy adaptive RK45 ODE solver instead of the fast '
+             'exponential midpoint propagator.',
+    )
+    parser.add_argument(
         '--output', '-o', default='results',
         help='Output directory for CSV and plots. Default: results/',
     )
@@ -305,7 +314,9 @@ def main(argv=None):
     for filepath in cxw_files:
         for mode in modes:
             df = _run_mode(filepath, mode, args.n_starts, args.output,
-                           channels=channels, n_parallel_jobs=args.n_parallel_jobs)
+                           channels=channels,
+                           n_parallel_jobs=args.n_parallel_jobs,
+                           fast=args.fast)
             if df.empty:
                 continue
             all_dfs.append(df)

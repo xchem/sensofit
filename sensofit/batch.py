@@ -23,7 +23,7 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 
 def batch_fit(filepath, mode='dk', channels='all', progress=True,
-              n_starts=3, n_parallel_jobs=None):
+              n_starts=3, n_parallel_jobs=None, fast=True):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -48,6 +48,10 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     n_starts : int
         Number of starting points for ODE multi-start refinement.
         Ignored when mode='dk'.
+    fast : bool
+        Use the exponential midpoint propagator for ODE fitting (default),
+        or the legacy adaptive RK45 solver when false. Ignored when
+        mode='dk'.
 
     Returns
     -------
@@ -79,11 +83,13 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     if n_parallel_jobs:
         all_results = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
-                                    fit_func, n_starts) for i, sample in enumerate(samples)
+                                    fit_func, n_starts, fast)
+            for i, sample in enumerate(samples)
         )
     else:
         all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
-                                      fit_func, n_starts) for i, sample in enumerate(samples)]
+                                      fit_func, n_starts, fast)
+                       for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
     rows = [r[1] for r in all_results]
@@ -102,7 +108,8 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     return df, data, results
 
 
-def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func, n_starts):
+def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func,
+                   n_starts, fast=True):
     """Process a single sample with error handling and NSB filtering."""
     if progress:
         elapsed = time.time() - t0
@@ -145,6 +152,7 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             w = get_weight_from_derivative(sample, blank)
             kwargs["association_weight"] = w
             kwargs['n_starts'] = n_starts
+            kwargs['fast'] = fast
         result = fit_func(sample, dmso, **kwargs)
         row = _extract_row(sample, result, mode)
         row['binding'] = True
