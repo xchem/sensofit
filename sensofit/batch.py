@@ -25,7 +25,7 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 def batch_fit(filepath, mode='dk', channels='all', progress=True,
               n_starts=3, n_parallel_jobs=None, fast=True,
-              blank_selection='current', rng_seed=None):
+              blank_selection='current', rng_seed=None, subset_csv=None):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -54,6 +54,9 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         Use the exponential midpoint propagator for ODE fitting (default),
         or the legacy adaptive RK45 solver when false. Ignored when
         mode='dk'.
+    subset_csv : str or None
+        Optional CSV containing ``rk_serie_id``, ``cycle_index``, and
+        ``channel`` columns. Only matching samples are fitted.
     blank_selection : {'current', 'legacy'}
         Blank quality rules to use. ``'legacy'`` supports controlled
         comparisons with the rules used before the additional stability
@@ -74,6 +77,23 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     """
     data = load_experiment(filepath, channels=channels)
     samples = data['samples']
+    if subset_csv is not None:
+        subset = pd.read_csv(subset_csv)
+        required = {'rk_serie_id', 'cycle_index', 'channel'}
+        missing = required.difference(subset.columns)
+        if missing:
+            raise ValueError(
+                f'subset CSV missing required columns: {sorted(missing)}')
+        keys = {
+            (str(row.rk_serie_id), int(row.cycle_index), str(row.channel))
+            for row in subset.itertuples(index=False)
+        }
+        samples = [
+            sample for sample in samples
+            if (str(sample.get('rk_serie_id')), int(sample['index']),
+                str(sample.get('channel', ''))) in keys
+        ]
+        data['samples'] = samples
     dmso_cals = data['dmso_cals']
     blanks = prepare_blanks(data['blanks'], selection=blank_selection)
     data['blanks'] = blanks
