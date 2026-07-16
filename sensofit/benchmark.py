@@ -19,6 +19,15 @@ from .batch import batch_fit, flag_poor_fits
 
 TRACE_KEY = ["source_file", "rk_serie_id", "cycle_index", "channel"]
 QUALITY_TARGETS = ["noisy", "injection_issue", "carryover"]
+PREDICTION_INPUT_COLUMNS = [
+    "binding",
+    "non_specific",
+    "nonspecific",
+    "binding_regime",
+    "KD_uM",
+    "KD",
+    *QUALITY_TARGETS,
+]
 REQUIRED_SOURCE_FILES = {
     "20260323_EV712A_Binding_assay.cxw",
     "20260526_ZIKV-RdRp_Binding_assay.cxw",
@@ -282,6 +291,54 @@ def prepare_predictions(predictions: pd.DataFrame) -> pd.DataFrame:
             classify_affinity_regime(kd, binds)
             for kd, binds in zip(kd_uM, binding)
         ]
+    return prepared
+
+
+def validate_evaluation_input(
+    predictions: pd.DataFrame,
+    tasks: BenchmarkTasks,
+    *,
+    source: str = "prediction CSV",
+) -> pd.DataFrame:
+    """Validate and normalize an external prediction table before scoring."""
+    supplied = [
+        column for column in PREDICTION_INPUT_COLUMNS
+        if column in predictions.columns
+    ]
+    if not supplied:
+        raise ValueError(
+            f"{source} contains no recognized prediction columns. "
+            "Expected at least one of: "
+            f"{', '.join(PREDICTION_INPUT_COLUMNS)}. "
+            "benchmark_trace_keys.csv contains identifiers only; pass a "
+            "predictions.csv file or add predictions to the exported keys."
+        )
+
+    prepared = prepare_predictions(predictions)
+    usable = pd.Series(False, index=prepared.index)
+    for target in ["binding", "non_specific", *QUALITY_TARGETS]:
+        if target in prepared:
+            usable |= prepared[target].map(_coerce_bool).notna()
+    if "binding_regime" in prepared:
+        usable |= prepared["binding_regime"].notna()
+    if not usable.any():
+        raise ValueError(
+            f"{source} has recognized prediction columns "
+            f"({', '.join(supplied)}), but none contain usable values."
+        )
+
+    benchmark_keys = tasks.trace_keys()
+    matched = prepared[TRACE_KEY].merge(
+        benchmark_keys,
+        on=TRACE_KEY,
+        how="inner",
+    )
+    if matched.empty:
+        raise ValueError(
+            f"{source} contains no trace keys matching this benchmark. "
+            "Check source_file, rk_serie_id, cycle_index, channel, and "
+            "--benchmark-dir."
+        )
     return prepared
 
 
@@ -651,7 +708,14 @@ def main(argv=None) -> None:
         return
 
     if args.command == "evaluate":
-        predictions = prepare_predictions(pd.read_csv(args.predictions))
+        try:
+            predictions = validate_evaluation_input(
+                pd.read_csv(args.predictions),
+                tasks,
+                source=str(args.predictions),
+            )
+        except ValueError as error:
+            parser.error(str(error))
         evaluation = evaluate_predictions(predictions, tasks)
         output = Path(args.output) if args.output else _default_output(
             "experimentalist_benchmark_evaluation"

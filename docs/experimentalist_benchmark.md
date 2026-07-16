@@ -62,10 +62,21 @@ the approach supports:
 Then run:
 
 ```bash
-python -m sensofit.benchmark evaluate predictions.csv \
+python -m sensofit.benchmark evaluate \
+  runs/experimentalist_benchmark_dk/predictions.csv \
   --benchmark-dir data/experimentalist_benchmark \
   --output runs/my_approach_benchmark
 ```
+
+`evaluate` scores existing predictions without running a fitter. This is
+useful for comparing another fitting implementation, rescoring an older run,
+or evaluating hand-produced predictions. The `benchmark_trace_keys.csv` file
+is an identifier template, not a prediction file; add prediction columns to
+it first or pass the `predictions.csv` written by `run`.
+
+The command stops with an explanatory error if the input has no recognized
+prediction columns, all supplied predictions are unusable, or none of its
+trace keys match the selected benchmark.
 
 Missing predictions are reported through coverage. Accuracy is reported both
 on covered rows and as coverage-adjusted accuracy, where missing predictions

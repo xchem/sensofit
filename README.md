@@ -156,9 +156,13 @@ The reviewed trace benchmark in `data/experimentalist_benchmark/` can score any
 approach that produces a keyed prediction CSV:
 
 ```bash
-python -m sensofit.benchmark evaluate predictions.csv \
+python -m sensofit.benchmark evaluate runs/my_run/predictions.csv \
   --output runs/my_benchmark
 ```
+
+`benchmark_trace_keys.csv` is an identifier template rather than a prediction
+file. The evaluator reports a clear input error when no usable predictions or
+matching benchmark traces are present.
 
 To run the current SensoFit implementation only on the annotated traces:
 
