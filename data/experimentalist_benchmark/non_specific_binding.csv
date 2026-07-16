@@ -1,0 +1,17 @@
+source_file,rk_serie_id,cycle_index,channel,compound,experimentalist_label
+20260323_EV712A_Binding_assay.cxw,1,216,FC2-FC1,ASAP-0041785-001,specific
+20260323_EV712A_Binding_assay.cxw,1,216,FC3-FC1,ASAP-0041785-001,specific
+20260323_EV712A_Binding_assay.cxw,1,216,FC4-FC1,ASAP-0041785-001,specific
+20260526_ZIKV-RdRp_Binding_assay.cxw,1,141,FC2-FC1,ASAP-0043710-002,non_specific
+20260526_ZIKV-RdRp_Binding_assay.cxw,1,141,FC3-FC1,ASAP-0043710-002,non_specific
+20260526_ZIKV-RdRp_Binding_assay.cxw,1,141,FC4-FC1,ASAP-0043710-002,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,160,FC3-FC1,ASAP-0015479-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,160,FC4-FC1,ASAP-0015479-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,192,FC3-FC1,ASAP-0015936-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,192,FC4-FC1,ASAP-0015936-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,546,FC2-FC1,ASAP-0015443-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,546,FC3-FC1,ASAP-0015443-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,546,FC4-FC1,ASAP-0015443-001,non_specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,583,FC2-FC1,ASAP-0016160-001,specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,583,FC3-FC1,ASAP-0016160-001,specific
+20260626_ZIKV-NS2B-NS3_Binding_assay.cxw,1,583,FC4-FC1,ASAP-0016160-001,specific

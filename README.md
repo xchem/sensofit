@@ -149,3 +149,23 @@ sensofit/
 2. **ODE Refinement**: Use DK estimates as seeds for multi-start `scipy.optimize.least_squares` (TRF) against the full numerical ODE solution. The number of random starts is controlled by `n_starts` (default 3; use 1 for fast screening, 10–20 for robust estimates). The fit window is trimmed to [Injection, RinseEnd + margin] to exclude baseline artefacts.
 
 See [docs/fitting_approach.md](docs/fitting_approach.md) for details.
+
+## Experimentalist benchmark
+
+The reviewed trace benchmark in `data/experimentalist_benchmark/` can score any
+approach that produces a keyed prediction CSV:
+
+```bash
+python -m sensofit.benchmark evaluate predictions.csv \
+  --output runs/my_benchmark
+```
+
+To run the current SensoFit implementation only on the annotated traces:
+
+```bash
+python -m sensofit.benchmark run --data-dir data --mode dk \
+  --output runs/experimentalist_benchmark_dk
+```
+
+See [docs/experimentalist_benchmark.md](docs/experimentalist_benchmark.md) for
+the task definitions, prediction contract, metrics, and ODE command.
