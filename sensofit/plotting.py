@@ -284,23 +284,7 @@ def _find_selected_blank(result, sample, blanks):
     contextual = [blank for blank in candidates
                   if blank.get('channel') == channel
                   and blank.get('rk_serie_id') == rk_serie_id]
-    selected = contextual[0] if contextual else candidates[0]
-    if (result.get('blank_drift_corrected', False)
-            and not selected.get('drift_corrected', False)):
-        slope = result.get('blank_drift_slope')
-        try:
-            slope_is_finite = bool(np.isfinite(slope))
-        except (TypeError, ValueError):
-            slope_is_finite = False
-        if slope_is_finite:
-            selected = dict(selected)
-            time = np.asarray(selected['time'], dtype=float)
-            selected['signal'] = (
-                np.asarray(selected['signal'], dtype=float)
-                - slope * (time - time[0]))
-            selected['drift_corrected'] = True
-            selected['drift_slope'] = slope
-    return selected
+    return contextual[0] if contextual else candidates[0]
     
 
 

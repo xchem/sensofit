@@ -114,7 +114,7 @@ def test_linear_drifted_blank_is_rejected_without_rescue():
     assert select_blank(25, [drifting], selection='current') is None
 
 
-def test_dissociation_only_drift_is_not_corrected():
+def test_dissociation_only_drift_is_rejected():
     signal = np.zeros(71)
     signal[40:] = np.linspace(2.0, -3.0, 31)
     drifting = _blank(index=20, signal=signal)

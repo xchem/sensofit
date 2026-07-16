@@ -85,26 +85,6 @@ class TestPlotFit:
 
         assert _find_selected_blank(result, sample, [wrong_channel, selected]) is selected
 
-    def test_drift_corrected_blank_is_reconstructed_for_plotting(self):
-        sample = {'channel': 'FC2-FC1', 'rk_serie_id': 1}
-        result = {
-            'blank_index': 8,
-            'blank_drift_corrected': True,
-            'blank_drift_slope': -0.5,
-        }
-        blank = {
-            'index': 8,
-            'channel': 'FC2-FC1',
-            'rk_serie_id': 1,
-            'time': np.array([0.0, 1.0, 2.0]),
-            'signal': np.array([0.0, -0.5, -1.0]),
-        }
-
-        selected = _find_selected_blank(result, sample, [blank])
-
-        np.testing.assert_allclose(selected['signal'], 0.0)
-        np.testing.assert_allclose(blank['signal'], [0.0, -0.5, -1.0])
-
     def test_model_trace_is_labelled_fit(self):
         t = np.array([0.0, 1.0])
         result = {

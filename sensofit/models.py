@@ -344,7 +344,7 @@ def _blank_quality_metrics(blank: dict) -> tuple[dict, dict]:
         dissociation_drop = 0.0
 
     checks = {
-        'noisy baseline': baseline_std <= 2.5,
+        'baseline noise within limit': baseline_std <= 2.5,
         'unstable baseline start': baseline_shift <= 2.0,
         'positive steady-state response': steady_state < 5.0,
         'large positive response': max_signal <= 50.0,

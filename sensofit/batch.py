@@ -196,12 +196,8 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
 
 
 def _add_blank_metadata(target, blank):
-    """Record the selected blank and any preprocessing applied to it."""
+    """Record the blank selected for double referencing."""
     target['blank_index'] = blank.get('index') if blank else np.nan
-    target['blank_drift_corrected'] = bool(
-        blank and blank.get('drift_corrected', False))
-    target['blank_drift_slope'] = (
-        blank.get('drift_slope', np.nan) if blank else np.nan)
 
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""
@@ -224,8 +220,6 @@ def _extract_row(sample, result, mode):
         'sigma_res':    result['sigma_residual'],
         'n_points':     result.get('n_points', 0),
         'blank_index':  result['blank_index'],
-        'blank_drift_corrected': result.get('blank_drift_corrected', False),
-        'blank_drift_slope': result.get('blank_drift_slope', np.nan),
         'dmso_index':   result['dmso_index'],
     }
 
