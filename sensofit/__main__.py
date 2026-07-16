@@ -67,7 +67,8 @@ def _run_gui():
     SensoFitApp().run()
 
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
-              n_parallel_jobs=None, fast=True):
+              n_parallel_jobs=None, fast=True, blank_selection='current',
+              rng_seed=None):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -78,7 +79,9 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
 
     df, data, results = batch_fit(filepath, mode=mode, channels=channels,
                                   progress=True, n_starts=n_starts,
-                                  n_parallel_jobs=n_parallel_jobs, fast=fast)
+                                  n_parallel_jobs=n_parallel_jobs, fast=fast,
+                                  blank_selection=blank_selection,
+                                  rng_seed=rng_seed)
     if df.empty:
         return df
     
@@ -299,6 +302,16 @@ def main(argv=None):
         help='Active flow cell numbers to process (e.g. --channels 2 3). '
              'Default: all active channels.',
     )
+    parser.add_argument(
+        '--blank-selection', choices=['current', 'legacy'], default='current',
+        help='Blank quality rules to use. Use legacy for an old-selection '
+             'baseline with otherwise identical fitting code. Default: current.',
+    )
+    parser.add_argument(
+        '--rng-seed', type=int, default=None,
+        help='Base random seed for reproducible ODE multi-start fits. Each '
+             'sample receives a deterministic offset. Default: unset.',
+    )
 
     args = parser.parse_args(argv)
 
@@ -316,7 +329,9 @@ def main(argv=None):
             df = _run_mode(filepath, mode, args.n_starts, args.output,
                            channels=channels,
                            n_parallel_jobs=args.n_parallel_jobs,
-                           fast=args.fast)
+                           fast=args.fast,
+                           blank_selection=args.blank_selection,
+                           rng_seed=args.rng_seed)
             if df.empty:
                 continue
             all_dfs.append(df)

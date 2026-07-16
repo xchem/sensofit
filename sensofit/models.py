@@ -214,12 +214,25 @@ def _is_dmso_cal_valid(dmso_cycle: dict, verbose=False) -> bool:
 # Blank selection and double referencing
 # ---------------------------------------------------------------------------
 
-def select_blank(sample_index: int, blanks: list[dict], verbose=False) -> dict:
+def select_blank(sample_index: int, blanks: list[dict], verbose=False,
+                 selection='current') -> dict:
     """Select the nearest preceding blank cycle for double referencing.
 
-    If no blank precedes the sample, returns the closest overall.
+    If no blank precedes the sample, returns the closest overall. ``selection``
+    may be ``'current'`` for the latest quality rules or ``'legacy'`` for the
+    rules in use before the additional blank stability checks were introduced.
     """
-    valid = [b for b in blanks if _is_blank_valid(b, verbose=verbose)]
+    if selection == 'current':
+        candidates = prepare_blanks(blanks, selection=selection,
+                                    verbose=verbose)
+        valid = [b for b in candidates
+                 if _is_preprocessed_blank_valid(b, verbose=verbose)]
+    elif selection == 'legacy':
+        valid = [b for b in blanks
+                 if _is_blank_valid_legacy(b, verbose=verbose)]
+    else:
+        raise ValueError(
+            f"selection must be 'current' or 'legacy', got {selection!r}")
     if not valid:
         if verbose:
             channel = blanks[0]['channel'][:2] if blanks else 'unknown'
@@ -233,15 +246,8 @@ def select_blank(sample_index: int, blanks: list[dict], verbose=False) -> dict:
     return min(valid, key=lambda b: abs(b['index'] - sample_index))
 
 
-def _is_blank_valid(blank: dict, verbose=False) -> bool:
-    """Check if a blank cycle is valid for double referencing.
-    Criteria:
-    - Baseline signal std > 2.5 ==> BAD (indicates a noisy baseline before injection).
-    - -5 >= Steady-state baseline-subtracted signal (currently mean of last 10 points) >= 5 ==> BAD (indicates a strong binding response in the blank).
-    - max(Baseline-subtracted signal) > 50 ==> BAD (indicates a strong binding response in the blank).
-    - Response between injection and rinse <= -5 ==> BAD (indicates a problem during injection)
-    - Otherwise ==> GOOD (valid for double referencing).
-    """
+def _is_blank_valid_legacy(blank: dict, verbose=False) -> bool:
+    """Apply the blank quality rules used before the stability additions."""
     t = blank['time']
     markers = blank['markers']
     bl_time = blank.get('baseline_duration_s', 45)
@@ -249,25 +255,192 @@ def _is_blank_valid(blank: dict, verbose=False) -> bool:
     rinse_time = markers.get('Rinse', t[-1])
     bl_mask = t <= bl_time
     response_mask = (t >= inj_time) & (t <= rinse_time)
-    baseline = blank['signal'][bl_mask].mean() if bl_mask.any() else blank['signal'][:int(bl_time)].mean()
+    baseline = (blank['signal'][bl_mask].mean() if bl_mask.any()
+                else blank['signal'][:int(bl_time)].mean())
     blank_signal = blank['signal'] - baseline
     baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
     steady_state = blank_signal[-10:].mean()
     max_signal = blank_signal.max()
-    min_response = blank_signal[response_mask].min() if response_mask.any() else blank_signal.min()
-    if verbose and not (baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0):
-        print(f"WARNING! Blank cycle {blank['index']} ({blank['channel']}) failed validity check "
-              f"(std={baseline_std:.2f}, steady_state={steady_state:.2f}, "
-              f"max_signal={max_signal:.2f}, min_response={min_response:.2f}). "
-              "This blank will be excluded from double referencing.")
-    return baseline_std <= 2.5 and -5.0 < steady_state < 5.0 and max_signal <= 50.0 and min_response > -5.0
+    min_response = (blank_signal[response_mask].min()
+                    if response_mask.any() else blank_signal.min())
+    valid = (baseline_std <= 2.5 and -5.0 < steady_state < 5.0
+             and max_signal <= 50.0 and min_response > -5.0)
+    if verbose and not valid:
+        print(
+            f"WARNING! Blank cycle {blank['index']} ({blank['channel']}) "
+            "failed legacy validity check "
+            f"(std={baseline_std:.2f}, steady_state={steady_state:.2f}, "
+            f"max_signal={max_signal:.2f}, min_response={min_response:.2f}). "
+            "This blank will be excluded from double referencing.")
+    return valid
+
+
+def _longest_true_run(mask: np.ndarray) -> int:
+    """Return the longest consecutive run of true values in ``mask``."""
+    longest = current = 0
+    for value in np.asarray(mask, dtype=bool):
+        if value:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _blank_quality_metrics(blank: dict) -> tuple[dict, dict]:
+    """Return current blank-QC checks and their diagnostic metrics."""
+    t = np.asarray(blank['time'], dtype=float)
+    signal = np.asarray(blank['signal'], dtype=float)
+    markers = blank['markers']
+    bl_time = blank.get('baseline_duration_s', 45)
+    inj_time = markers.get('Injection', t[0])
+    rinse_time = markers.get('Rinse', t[-1])
+    rinse_end = markers.get('RinseEnd', t[-1])
+    bl_mask = t <= bl_time
+    post_injection_mask = (t >= inj_time) & (t <= rinse_end)
+    injection_phase_mask = (t >= inj_time) & (t < rinse_time)
+    dissociation_mask = (t >= rinse_time) & (t <= rinse_end)
+    baseline = (signal[bl_mask].mean() if bl_mask.any()
+                else signal[:int(bl_time)].mean())
+    blank_signal = signal - baseline
+    baseline_std = blank_signal[bl_mask].std() if bl_mask.any() else 0.0
+
+    baseline_times = t[bl_mask]
+    baseline_signal = blank_signal[bl_mask]
+    if baseline_times.size:
+        early_mask = baseline_times <= baseline_times[0] + 10.0
+        late_mask = baseline_times >= baseline_times[-1] - 10.0
+        early_baseline = np.median(baseline_signal[early_mask])
+        late_baseline = np.median(baseline_signal[late_mask])
+        baseline_shift = abs(early_baseline - late_baseline)
+    else:
+        baseline_shift = 0.0
+
+    steady_state = blank_signal[-10:].mean()
+    max_signal = blank_signal.max()
+    post_signal = blank_signal[post_injection_mask]
+    severe_negative_run = _longest_true_run(post_signal < -5.0)
+    injection_phase_mean = (
+        float(np.mean(blank_signal[injection_phase_mask]))
+        if injection_phase_mask.any() else np.inf)
+    dissociation_phase_mean = (
+        float(np.mean(blank_signal[dissociation_mask]))
+        if dissociation_mask.any() else np.inf)
+
+    dissociation_time = t[dissociation_mask]
+    dissociation_signal = blank_signal[dissociation_mask]
+    finite = np.isfinite(dissociation_time) & np.isfinite(dissociation_signal)
+    if finite.sum() >= 2:
+        dissociation_time = dissociation_time[finite]
+        dissociation_signal = dissociation_signal[finite]
+        early_dissociation = (
+            dissociation_time <= dissociation_time[0] + 10.0)
+        late_dissociation = (
+            dissociation_time >= dissociation_time[-1] - 10.0)
+        dissociation_drop = (
+            np.median(dissociation_signal[late_dissociation])
+            - np.median(dissociation_signal[early_dissociation]))
+    else:
+        dissociation_drop = 0.0
+
+    checks = {
+        'baseline noise within limit': baseline_std <= 2.5,
+        'unstable baseline start': baseline_shift <= 2.0,
+        'positive steady-state response': steady_state < 5.0,
+        'large positive response': max_signal <= 50.0,
+        'three points below -5': severe_negative_run < 3,
+        'injection phase mean below -2': injection_phase_mean >= -2.0,
+        'dissociation phase mean below -2': dissociation_phase_mean >= -2.0,
+        'negative dissociation drift': dissociation_drop > -2.0,
+    }
+    metrics = {
+        'baseline_std': baseline_std,
+        'baseline_shift': baseline_shift,
+        'steady_state': steady_state,
+        'max_signal': max_signal,
+        'severe_negative_run': severe_negative_run,
+        'injection_phase_mean': injection_phase_mean,
+        'dissociation_phase_mean': dissociation_phase_mean,
+        'dissociation_drop': dissociation_drop,
+    }
+    return checks, metrics
+
+
+def _prepare_blank_for_selection(blank: dict, verbose=False) -> dict:
+    """Cache raw current-mode blank QC for repeated sample selection."""
+    if blank.get('_blank_prepared_current', False):
+        return blank
+    prepared = dict(blank)
+    prepared['_blank_prepared_current'] = True
+    checks, metrics = _blank_quality_metrics(blank)
+    prepared['_blank_qc_checks'] = checks
+    prepared['_blank_qc_metrics'] = metrics
+    prepared['_blank_current_valid'] = all(checks.values())
+    return prepared
+
+
+def prepare_blanks(blanks: list[dict], selection='current',
+                   verbose=False) -> list[dict]:
+    """Preprocess blank cycles once for repeated sample selection."""
+    if selection == 'legacy':
+        return blanks
+    if selection != 'current':
+        raise ValueError(
+            f"selection must be 'current' or 'legacy', got {selection!r}")
+    return [_prepare_blank_for_selection(blank, verbose=verbose)
+            for blank in blanks]
+
+
+def _is_preprocessed_blank_valid(blank: dict, verbose=False) -> bool:
+    """Validate a cached raw current-mode blank."""
+    checks = blank.get('_blank_qc_checks')
+    metrics = blank.get('_blank_qc_metrics')
+    if checks is None or metrics is None:
+        checks, metrics = _blank_quality_metrics(blank)
+    valid = all(checks.values())
+    if verbose and not valid:
+        failed = ', '.join(name for name, passed in checks.items()
+                           if not passed)
+        print(
+            f"WARNING! Blank cycle {blank['index']} ({blank['channel']}) "
+            f"failed validity check ({failed}; "
+            f"std={metrics['baseline_std']:.2f}, "
+            f"baseline_shift={metrics['baseline_shift']:.2f}, "
+            f"steady_state={metrics['steady_state']:.2f}, "
+            f"max_signal={metrics['max_signal']:.2f}, "
+            f"severe_negative_run={metrics['severe_negative_run']}, "
+            f"injection_phase_mean={metrics['injection_phase_mean']:.2f}, "
+            f"dissociation_phase_mean={metrics['dissociation_phase_mean']:.2f}, "
+            f"dissociation_drop={metrics['dissociation_drop']:.2f}). "
+            "This blank will be excluded from double referencing.")
+    return valid
+
+
+def _is_blank_valid(blank: dict, verbose=False) -> bool:
+    """Preprocess and validate a blank cycle for double referencing.
+
+    Criteria:
+    - Baseline signal std > 2.5 ==> BAD (indicates a noisy baseline before injection).
+    - First-to-last 10 s baseline shift > 2 ==> BAD (baseline has not settled).
+    - Steady-state baseline-subtracted signal > 5 ==> BAD (indicates a strong positive response in the blank).
+    - max(Baseline-subtracted signal) > 50 ==> BAD (indicates a strong binding response in the blank).
+    - Three consecutive points < -5 between injection and rinse end ==> BAD.
+    - Mean response < -2 during either Injection-to-Rinse or
+      Rinse-to-RinseEnd ==> BAD.
+    - A sustained dissociation decline of 2 response units or more ==> BAD
+      (indicates sustained negative drift after rinse).
+    - Otherwise ==> GOOD (valid for double referencing).
+    """
+    prepared = _prepare_blank_for_selection(blank, verbose=verbose)
+    return _is_preprocessed_blank_valid(prepared, verbose=verbose)
+
 
 def double_reference(sample: dict, blank: dict):
-    """Apply double referencing: subtract nearest preceding blank.
+    """Apply double referencing using an already-selected blank.
 
-    If the subtraction yields a negative peak response near the Rinse
-    marker, iterates through preceding blanks until a valid one is found.
-    Handles array length mismatches by truncating to the shorter length.
+    Blank validation and fallback selection are handled by
+    :func:`select_blank`. Array length mismatches are handled by truncating
+    to the shorter length.
 
     Parameters
     ----------

@@ -17,13 +17,15 @@ from .data_loader import load_cxw
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_issue, is_reference_response_negative,
                      is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
-                     double_reference, select_blank, select_dmso_cal, get_weight_from_derivative)
+                     double_reference, select_blank, select_dmso_cal,
+                     prepare_blanks, get_weight_from_derivative)
 from .direct_kinetics import fit_sample as dk_fit_sample
 from .ode_fitting import fit_sample as ode_fit_sample
 
 
 def batch_fit(filepath, mode='dk', channels='all', progress=True,
-              n_starts=3, n_parallel_jobs=None, fast=True, subset_csv=None):
+              n_starts=3, n_parallel_jobs=None, fast=True,
+              blank_selection='current', rng_seed=None, subset_csv=None):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -55,6 +57,14 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     subset_csv : str or None
         Optional CSV containing ``rk_serie_id``, ``cycle_index``, and
         ``channel`` columns. Only matching samples are fitted.
+    blank_selection : {'current', 'legacy'}
+        Blank quality rules to use. ``'legacy'`` supports controlled
+        comparisons with the rules used before the additional stability
+        checks; all other fitting and exclusion logic is unchanged.
+    rng_seed : int or None
+        Base seed for reproducible ODE multi-start fits. Each sample receives
+        a deterministic offset from this seed. ``None`` preserves the
+        historical non-reproducible behavior.
 
     Returns
     -------
@@ -85,7 +95,8 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         ]
         data['samples'] = samples
     dmso_cals = data['dmso_cals']
-    blanks = data['blanks']
+    blanks = prepare_blanks(data['blanks'], selection=blank_selection)
+    data['blanks'] = blanks
 
     if mode not in ('dk', 'ode'):
         raise ValueError(f"mode must be 'dk' or 'ode', got {mode!r}")
@@ -103,16 +114,20 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     if n_parallel_jobs:
         all_results = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
-                                    fit_func, n_starts, fast)
+                                    fit_func, n_starts, fast, blank_selection,
+                                    rng_seed)
             for i, sample in enumerate(samples)
         )
     else:
         all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
-                                      fit_func, n_starts, fast)
+                                      fit_func, n_starts, fast, blank_selection,
+                                      rng_seed)
                        for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
     rows = [r[1] for r in all_results]
+    for row in rows:
+        row['blank_selection'] = blank_selection
 
     if progress:
         elapsed = time.time() - t0
@@ -129,7 +144,7 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
 
 
 def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func,
-                   n_starts, fast=True):
+                   n_starts, fast=True, blank_selection='current', rng_seed=None):
     """Process a single sample with error handling and NSB filtering."""
     if progress:
         elapsed = time.time() - t0
@@ -150,13 +165,16 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
     if not ch_blanks:
         ch_blanks = blanks
     # Select blank and DMSO cal closest in time to the sample
-    blank = select_blank(sample['index'], ch_blanks) if ch_blanks else None
+    blank = (select_blank(sample['index'], ch_blanks,
+                          selection=blank_selection)
+             if ch_blanks else None)
     dmso = select_dmso_cal(sample['index'], ch_dmso) if ch_dmso else None
 
     # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blank=blank)
     if "negative_response_in_reference_channel" in heuristics or "low_signal_to_noise_response" in heuristics:
         row = _fallback_row(sample, mode)
+        _add_blank_metadata(row, blank)
         row['binding'] = False
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
@@ -173,7 +191,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             kwargs["association_weight"] = w
             kwargs['n_starts'] = n_starts
             kwargs['fast'] = fast
+            kwargs['rng_seed'] = (rng_seed + i if rng_seed is not None else None)
         result = fit_func(sample, dmso, **kwargs)
+        _add_blank_metadata(result, blank)
         row = _extract_row(sample, result, mode)
         row['binding'] = True
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
@@ -183,6 +203,7 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['error'] = np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
+        _add_blank_metadata(row, blank)
         row['binding'] = False
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
@@ -192,6 +213,11 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         return [None, row]
 
     return [result, row]
+
+
+def _add_blank_metadata(target, blank):
+    """Record the blank selected for double referencing."""
+    target['blank_index'] = blank.get('index') if blank else np.nan
 
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""

@@ -264,7 +264,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
 def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF',
                smoothing_factor=None, neg_ss_correction=False,
-               association_weight=0.0, n_starts=1, fast=True):
+               association_weight=0.0, n_starts=1, fast=True, rng_seed=None):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
@@ -289,6 +289,8 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
     fast : bool
         Use the stable two-half-step exponential propagator when true
         (default), or the legacy adaptive RK45 solver when false.
+    rng_seed : int or None
+        Seed for reproducible ODE multi-start perturbations.
 
     Returns
     -------
@@ -327,7 +329,15 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
             kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
             ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
             KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
-            Rmax_seed = signal[asso_mask].max()*((ka_seed*sample['concentration_M']+kd_seed)/(ka_seed*sample['concentration_M']))
+            ka_c = ka_seed * sample['concentration_M']
+            if not np.isfinite(ka_c) or ka_c <= 0:
+                raise ValueError(
+                    'last-pulse association fit produced a non-positive '
+                    'ka × concentration seed')
+            Rmax_seed = signal[asso_mask].max() * ((ka_c + kd_seed) / ka_c)
+            if not np.isfinite(Rmax_seed) or Rmax_seed <= 0:
+                raise ValueError(
+                    'last-pulse fit produced an invalid Rmax seed')
         except Exception as e:
             print(f'WARNING! Last-pulse fit failed for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
                   f'channel {sample.get("channel", "")}): {e}. Using default seeds for ODE fitting.')
@@ -354,7 +364,7 @@ def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF'
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
                   ka0=ka_seed, kd0=kd_seed, Rmax0=Rmax_seed,
-                  n_starts=n_starts, fast=fast)
+                  n_starts=n_starts, rng_seed=rng_seed, fast=fast)
 
     # Map R_fit back to full time grid
     R_fit_full = np.full_like(signal, np.nan)
