@@ -57,10 +57,20 @@ $$
 \text{signal\_dr} = (\text{signal\_sample} - \text{baseline\_sample}) - (\text{signal\_blank} - \text{baseline\_blank})
 $$
 
-The nearest *preceding* blank is preferred. If subtraction yields negative
-peak response (blank overcorrection), subsequent preceding blanks are tried.
+The nearest valid *preceding* blank is preferred. Current-mode QC is applied
+directly to the raw blank trace and is cached once per experiment. A blank
+that fails any current QC rule is rejected. The current rules are: baseline
+standard deviation ≤2.5 RU;
+first-versus-last 10-second baseline shift ≤2 RU; final steady-state response
+<5 RU; maximum response ≤50 RU; fewer than three consecutive points strictly
+below −5 RU; Injection-to-Rinse and Rinse-to-RinseEnd means ≥−2 RU; and a
+final-versus-initial dissociation 10-second median drop >−2 RU. If a blank is
+rejected, the next valid preceding blank is used. Legacy selection remains
+unchanged and is available for controlled comparisons.
 
-**Implementation:** `models.double_reference(sample, blanks)`
+**Implementation:** `models.select_blank(sample_index, blanks)` followed by
+`models.double_reference(sample, blank)`. Pass `--blank-selection legacy` to
+the command-line interface to reproduce the pre-stability blank rules.
 
 ### 2c. Non-Specific Binder Detection
 
