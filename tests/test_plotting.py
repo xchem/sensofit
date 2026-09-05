@@ -17,7 +17,7 @@ from sensofit.plotting import (
     _sanitise_filename,
     plot_fit,
     save_fit_plots,
-    save_plot,
+    save_plots,
 )
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
@@ -228,7 +228,7 @@ class TestSaveFitPlots:
         ])
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            paths = save_plot(df, samples, results, tmpdir, mode='ode', blanks=[{'index': 9, 'time': t, 'signal': np.zeros_like(t), 'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0}, 'baseline_duration_s': 0.5}])
+            paths = save_plots(df, samples, results, tmpdir, mode='ode', blanks=[{'index': 9, 'time': t, 'signal': np.zeros_like(t), 'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0}, 'baseline_duration_s': 0.5}])
             assert len(paths) == 1
             assert paths[0] is not None
             assert os.path.isfile(paths[0])

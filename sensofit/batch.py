@@ -13,7 +13,7 @@ import time
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from .data_loader import load_cxw
+from .data_loader import load_cxw, estimate_capture_levels
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_issue, is_reference_response_negative,
                      is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
@@ -25,7 +25,9 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 def batch_fit(filepath, mode='dk', channels='all', progress=True,
               n_starts=3, n_parallel_jobs=None, fast=True,
-              blank_selection='current', rng_seed=None, subset_csv=None):
+              blank_selection='current', rng_seed=None, subset_csv=None,
+              ode_fit_variant='legacy', prefit_thresholds=None,
+              fit_no_binding=False, max_cost_ratio=1.1):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -66,6 +68,15 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         a deterministic offset from this seed. ``None`` preserves the
         historical non-reproducible behavior.
 
+    ode_fit_variant : {'legacy', 'joint_reference_offset_prefit_basin'}
+        Use the legacy fitter or joint-reference fitting with pre-fit basins.
+    prefit_thresholds : sequence of three floats or None
+        Finite, increasing regime boundaries; default (0.80, 2.05, 2.97).
+    fit_no_binding : bool
+        Override only the pre-fit no-binding skip; default False.
+    max_cost_ratio : float
+        Finite constrained/unrestricted cost limit >= 1; default 1.1.
+
     Returns
     -------
     df : pd.DataFrame
@@ -101,33 +112,51 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     if mode not in ('dk', 'ode'):
         raise ValueError(f"mode must be 'dk' or 'ode', got {mode!r}")
 
+    if ode_fit_variant not in {'legacy', 'joint_reference_offset_prefit_basin'}:
+        raise ValueError(f'unknown ODE fitting method: {ode_fit_variant}')
     n_parallel_jobs = n_parallel_jobs if mode != 'dk' else None
 
     fit_func = dk_fit_sample if mode == 'dk' else ode_fit_sample
+    current_metadata = None
+    if mode == 'ode' and ode_fit_variant == 'joint_reference_offset_prefit_basin':
+        from .affinity_prior import _validate_prefit_thresholds
+        from .current_fitting import fit_sample, _validate_max_cost_ratio
+        fit_func = fit_sample
+        current_metadata = (
+            estimate_capture_levels(data),
+            (data.get('project') or {}).get('ligand_mw_Da'),
+            _validate_prefit_thresholds(prefit_thresholds), fit_no_binding,
+            _validate_max_cost_ratio(max_cost_ratio),
+        )
 
     n = len(samples)
     if n == 0:
+        if current_metadata is not None:
+            return pd.DataFrame(), data, []
         print(f"No samples found in file: {filepath}.")
         return pd.DataFrame(), data
     t0 = time.time()
 
     if n_parallel_jobs:
-        all_results = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
+        backend = None if current_metadata is not None else 'multiprocessing'
+        all_results = Parallel(n_jobs=n_parallel_jobs, backend=backend)(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                     fit_func, n_starts, fast, blank_selection,
-                                    rng_seed)
+                                    rng_seed, current_metadata)
             for i, sample in enumerate(samples)
         )
     else:
         all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                       fit_func, n_starts, fast, blank_selection,
-                                      rng_seed)
+                                      rng_seed, current_metadata)
                        for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
     rows = [r[1] for r in all_results]
     for row in rows:
         row['blank_selection'] = blank_selection
+        if current_metadata is not None:
+            row['ode_fit_variant'] = ode_fit_variant
 
     if progress:
         elapsed = time.time() - t0
@@ -144,9 +173,11 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
 
 
 def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func,
-                   n_starts, fast=True, blank_selection='current', rng_seed=None):
+                   n_starts, fast=True, blank_selection='current', rng_seed=None,
+                   current_metadata=None):
     """Process a single sample with error handling and NSB filtering."""
-    if progress:
+    current = current_metadata is not None
+    if progress and not current:
         elapsed = time.time() - t0
         eta = (elapsed / (i + 1)) * (n - i - 1) if i > 0 else 0
         ch_label = sample.get('channel', '')
@@ -172,7 +203,13 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
 
     # Check for negative signal in reference channel before fitting
     heuristics = sensorgram_heuristics(sample, blank=blank)
-    if "negative_response_in_reference_channel" in heuristics or "low_signal_to_noise_response" in heuristics:
+    kwargs, skip_fields = {}, {}
+    if current and "negative_response_in_reference_channel" not in heuristics:
+        from .current_fitting import prepare_sample
+        kwargs, skip_fields = prepare_sample(sample, blank, dmso, heuristics, *current_metadata)
+    if ("negative_response_in_reference_channel" in heuristics
+            or (not current and "low_signal_to_noise_response" in heuristics)
+            or skip_fields):
         row = _fallback_row(sample, mode)
         _add_blank_metadata(row, blank)
         row['binding'] = False
@@ -182,13 +219,15 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['carryover'] = True if "sample_carryover" in heuristics else False
         row['error'] = np.nan
         row['success'] = np.nan
+        row.update(skip_fields)
         return [None, row]
 
     try:
-        kwargs = {'blank': blank}
+        kwargs['blank'] = blank
         if mode == 'ode':
-            w = get_weight_from_derivative(sample, blank)
-            kwargs["association_weight"] = w
+            if not current:
+                w = get_weight_from_derivative(sample, blank)
+                kwargs["association_weight"] = w
             kwargs['n_starts'] = n_starts
             kwargs['fast'] = fast
             kwargs['rng_seed'] = (rng_seed + i if rng_seed is not None else None)
@@ -210,6 +249,8 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['injection_issue'] = True if "injection_issue" in heuristics else False
         row['carryover'] = True if "sample_carryover" in heuristics else False
         row['error'] = str(e)
+        if current:
+            row['success'] = np.nan
         return [None, row]
 
     return [result, row]
@@ -267,6 +308,15 @@ def _extract_row(sample, result, mode):
             'message':      result.get('message', ''),
         })
 
+    if result.get('prefit_basin_selection_enabled', False):
+        row.update({key: value for key, value in result.items()
+                    if value is None or np.isscalar(value)})
+        theory = result.get('Rmax_theory', np.nan)
+        row['Rmax_ratio_theory'] = (
+            result['Rmax'] / theory if np.isfinite(theory) and theory > 0 else np.nan)
+        for key in ('prefit_basin_requested_bounds', 'reference_scale_bounds'):
+            row[key] = result.get(key)
+        row.update(kinetic_fit_skipped=False, kinetic_fit_skip_reason='')
     return row
 
 
@@ -332,7 +382,9 @@ def sensorgram_heuristics(sample, blank=None):
 
 def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
                    Rmax_min=1.1, sigma_max=2.0,
-                   se_threshold=0.5, iqr_threshold=0.25):
+                   se_threshold=0.5, iqr_threshold=0.25,
+                   negligible_binding_amplitude=0.1,
+                   bound_limited_binding_amplitude=2.0):
     """Add a 'flag' column marking questionable fits.
 
     A fit is flagged if any of the following hold:
@@ -356,6 +408,8 @@ def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
     """
     flags = []
     reasons = []
+    affinity_identifiable = []
+    affinity_reasons = []
 
     for _, row in df.iterrows():
         r = []
@@ -366,12 +420,23 @@ def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
         kd_se = row.get('kd_se')
         kd_iqr = row.get('kd_iqr')
         Rmax = row.get('Rmax')
+        Rmax_lower_bound = row.get('Rmax_lower_bound')
+        Rmax_upper_bound = row.get('Rmax_upper_bound')
         Rmax_se = row.get('Rmax_se')
         Rmax_iqr = row.get('Rmax_iqr')
         sigma_res = row.get('sigma_res')
+        concentration = row.get('concentration_M')
+        binding_amplitude = row.get('binding_amplitude')
+        kinetic_fit_skipped = row.get('kinetic_fit_skipped', False)
+        kinetic_fit_skipped = bool(
+            pd.notna(kinetic_fit_skipped) and kinetic_fit_skipped)
+        skip_reason = row.get('kinetic_fit_skip_reason', '')
+        skip_reason = str(skip_reason) if pd.notna(skip_reason) else ''
         if row.get('flag', False):
             r.append(row.get('flag_reason', ''))  # Preserve existing flag reason
-        if not row.get('success', False):
+        if kinetic_fit_skipped:
+            r.append(f'kinetic_fit_skipped:{skip_reason}' if skip_reason else 'kinetic_fit_skipped')
+        elif not row.get('success', False):
             r.append('fit_failed')
         if pd.notna(ka) and ka <= ka_min:
             r.append('ka_at_bound')
@@ -387,17 +452,53 @@ def flag_poor_fits(df, kd_max=9.9, ka_min=0.5,
             r.append('kd_high_iqr')
         if pd.notna(Rmax) and Rmax <= Rmax_min:
             r.append('low_Rmax')
+        if (pd.notna(Rmax) and pd.notna(Rmax_lower_bound)
+                and Rmax <= 1.01 * Rmax_lower_bound):
+            r.append('Rmax_at_physical_lower_bound')
+        if (pd.notna(Rmax) and pd.notna(Rmax_upper_bound)
+                and Rmax >= 0.99 * Rmax_upper_bound):
+            r.append('Rmax_at_physical_upper_bound')
         if pd.notna(Rmax_se) and Rmax_se > se_threshold * abs(Rmax):
             r.append('Rmax_high_se')
         if pd.notna(Rmax_iqr) and Rmax_iqr > iqr_threshold * abs(Rmax):
             r.append('Rmax_high_iqr')
         if pd.notna(sigma_res) and sigma_res > sigma_max:
             r.append('high_residual')
+        early_mismatch = row.get('early_dissociation_mismatch', False)
+        if pd.notna(early_mismatch) and bool(early_mismatch):
+            r.append('early_dissociation_mismatch')
+        prefit_bound_hit = row.get('prefit_basin_bound_hit', False)
+        if pd.notna(prefit_bound_hit) and bool(prefit_bound_hit):
+            r.append('pKD_at_prefit_basin_bound')
 
         flags.append(len(r) > 0)
         reasons.append('; '.join(r) if r else '')
 
+        affinity_reason = ''
+        positive_concentration = (
+            pd.notna(concentration) and float(concentration) > 0)
+        if kinetic_fit_skipped:
+            affinity_reason = skip_reason or 'kinetic_fit_skipped'
+        elif (positive_concentration and pd.notna(binding_amplitude)
+                and binding_amplitude < negligible_binding_amplitude):
+            affinity_reason = 'negligible_fitted_binding_amplitude'
+        elif (
+            positive_concentration
+            and pd.notna(binding_amplitude)
+            and binding_amplitude < bound_limited_binding_amplitude
+            and pd.notna(kd)
+            and kd >= kd_max
+            and pd.notna(Rmax)
+            and pd.notna(Rmax_lower_bound)
+            and Rmax <= 1.01 * Rmax_lower_bound
+        ):
+            affinity_reason = 'bound_limited_low_binding_amplitude'
+        affinity_identifiable.append(not affinity_reason)
+        affinity_reasons.append(affinity_reason)
+
     df = df.copy()
     df['flag'] = flags
     df['flag_reason'] = reasons
+    df['affinity_identifiable'] = affinity_identifiable
+    df['affinity_unidentifiable_reason'] = affinity_reasons
     return df

@@ -886,7 +886,8 @@ def build_weight_mask(t: np.ndarray, markers: dict) -> np.ndarray:
 
 
 def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
-                           dmso_cycle: dict, association_weight: float = 0.0) -> np.ndarray:
+                           dmso_cycle: dict, association_weight: float = 0.0,
+                           transition_window_s: float = 0.0) -> np.ndarray:
     """Weight mask using buffer pulses during association + full dissociation.
 
     During pulsed GCI injection, RI bulk artifacts contaminate the signal
@@ -938,6 +939,13 @@ def build_full_weight_mask(sample_time: np.ndarray, sample_markers: dict,
     if association_weight > 0:
         w[(w != 1) & inj_mask] = association_weight
 
+    if not np.isfinite(transition_window_s) or transition_window_s < 0:
+        raise ValueError('transition_window_s must be finite and non-negative')
+    if transition_window_s > 0:
+        for marker_name in ('Injection', 'Rinse', 'RinseEnd'):
+            marker_time = sample_markers.get(marker_name)
+            if marker_time is not None:
+                w[np.abs(t - marker_time) <= transition_window_s] = 0.0
     return w
 
 
@@ -1195,4 +1203,53 @@ def simulate_sensorgram(t: np.ndarray, ka: float, kd: float, Rmax: float,
         R[i] = (equilibrium_second[j]
                 + (r_half - equilibrium_second[j]) * decay_second[j])
 
+    return R
+
+
+def blank_correct_raw_channels(sample: dict, blank: dict | None):
+    """Baseline- and blank-correct active and reference channels separately."""
+    t = np.asarray(sample['time'], dtype=float)
+    bl_time = sample.get('baseline_duration_s', 45)
+    baseline_mask = t <= bl_time
+
+    def correct_channel(key):
+        values = np.asarray(sample[key], dtype=float)
+        baseline = (values[baseline_mask] if baseline_mask.any()
+                    else values[:max(int(bl_time), 1)])
+        corrected = values - float(np.mean(baseline))
+        if blank:
+            blank_values = np.asarray(blank[key], dtype=float)
+            n = min(values.size, blank_values.size)
+            blank_time = np.asarray(blank.get('time', t[:n]), dtype=float)[:n]
+            mask = blank_time <= bl_time
+            baseline = blank_values[:n][mask] if mask.any() else blank_values[:n]
+            corrected[:n] -= blank_values[:n] - float(np.mean(baseline))
+        return corrected
+
+    return correct_channel('raw_active'), correct_channel('raw_reference')
+
+
+def simulate_sensorgram_zoh(t: np.ndarray, ka: float, kd: float, Rmax: float,
+                        c_func, R0: float = 0.0,
+                        fast: bool = True) -> np.ndarray:
+    """Propagate Langmuir binding with concentration held at each left endpoint.
+
+    The sampled DMSO profile is constant within each time step. ``fast=False``
+    delegates to the existing adaptive RK45 implementation.
+    """
+    t = np.asarray(t, dtype=float)
+    if not fast or len(t) < 2:
+        return simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=R0, fast=fast)
+    R = np.empty_like(t)
+    R[0] = R0
+    dt = np.diff(t)
+    c_eval = np.broadcast_to(np.asarray(c_func(t[:-1]), dtype=float), dt.shape)
+
+    # Precompute interval coefficients; only the state recurrence is serial.
+    rate = ka * c_eval + kd
+    decay = np.exp(-rate * dt)
+    equilibrium = np.divide(ka * c_eval * Rmax, rate,
+                            out=np.zeros_like(rate), where=rate != 0)
+    for i, (eq, step_decay) in enumerate(zip(equilibrium, decay), start=1):
+        R[i] = eq + (R[i - 1] - eq) * step_decay
     return R

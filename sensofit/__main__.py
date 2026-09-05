@@ -69,7 +69,8 @@ def _run_gui():
 
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
               n_parallel_jobs=None, fast=True, blank_selection='current',
-              rng_seed=None, only_plot_fits=False):
+              rng_seed=None, only_plot_fits=False, ode_fit_variant='legacy',
+              prefit_thresholds=None, fit_no_binding=False, max_cost_ratio=1.1):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -82,7 +83,10 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
                                   progress=True, n_starts=n_starts,
                                   n_parallel_jobs=n_parallel_jobs, fast=fast,
                                   blank_selection=blank_selection,
-                                  rng_seed=rng_seed)
+                                  rng_seed=rng_seed,
+                                  ode_fit_variant=ode_fit_variant,
+                                  prefit_thresholds=prefit_thresholds,
+                                  fit_no_binding=fit_no_binding, max_cost_ratio=max_cost_ratio)
     if df.empty:
         return df
 
@@ -102,7 +106,7 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
                                n_parallel_jobs=n_parallel_jobs,
                                blanks=blanks)
     else:
-        paths = save_plot(df, samples, results,
+        paths = save_plots(df, samples, results,
                           plot_dir, mode=mode,
                           n_parallel_jobs=n_parallel_jobs,
                           blanks=blanks)
@@ -334,6 +338,22 @@ def main(argv=None):
              'triplicate plot output. Default: False.',
     )
 
+    parser.add_argument(
+        '--ode-fit-variant',
+        choices=['legacy', 'joint_reference_offset_prefit_basin'],
+        default='legacy',
+        help='Use legacy fitting or the current per-channel joint-reference '
+             'method with physical bounds and pre-fit basin selection.',
+    )
+    parser.add_argument(
+        '--prefit-thresholds', nargs=3, type=float, metavar=('WEAK', 'MEDIUM', 'TIGHT'),
+        help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.')
+    parser.add_argument(
+        '--fit-no-binding', action='store_true',
+        help='Fit pre-fit no-binding traces; retain other exclusion checks.')
+    parser.add_argument(
+        '--max-cost-ratio', type=float, default=1.1,
+        help='Current-method constrained/unrestricted cost limit (>= 1). Default: 1.1.')
     args = parser.parse_args(argv)
 
     cxw_files = _find_cxw_files(args.input)
@@ -353,7 +373,10 @@ def main(argv=None):
                            fast=args.fast,
                            blank_selection=args.blank_selection,
                            rng_seed=args.rng_seed,
-                           only_plot_fits=args.only_plot_fits)
+                           only_plot_fits=args.only_plot_fits,
+                           ode_fit_variant=args.ode_fit_variant,
+                           prefit_thresholds=args.prefit_thresholds,
+                           fit_no_binding=args.fit_no_binding, max_cost_ratio=args.max_cost_ratio)
             if df.empty:
                 continue
             all_dfs.append(df)
