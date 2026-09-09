@@ -361,7 +361,7 @@ def main(argv=None):
     ordered = [c for c in priority if c in combined.columns]
     remaining = [c for c in combined.columns if c not in ordered]
     combined = combined[ordered + remaining]
-    combined.sort_values(['rk_serie_id','cycle_index', 'channel'],
+    combined.sort_values(['source_file', 'rk_serie_id','cycle_index', 'channel'],
                          inplace=True)
 
     csv_path = os.path.join(args.output, 'batch_results.csv')

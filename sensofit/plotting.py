@@ -31,34 +31,31 @@ def _safe_float(value):
     return value if np.isfinite(value) else np.nan
 
 
+def _affinity_range_for_kd(KD):
+    """Return the qualitative affinity range for a KD value."""
+    KD = _safe_float(KD)
+    if not np.isfinite(KD):
+        return 'unknown', 'grey'
+    if KD > 1e-4:
+        return 'weak', 'yellowgreen'
+    if KD >= 1e-6:
+        return 'medium', 'wheat'
+    return 'tight', 'lightcoral'
+
+
 def _metric_lines_for_result(result, sample):
-    """Return a list of metric strings for an info box."""
+    """Return a list of metric strings for the info box."""
     if result is None:
         result = {}
     ka = _safe_float(result.get('ka', np.nan))
     kd = _safe_float(result.get('kd', np.nan))
-    KD = _safe_float(result.get('KD', np.nan))
-    Rmax = _safe_float(result.get('Rmax', np.nan))
     rmse = _safe_float(result.get('rmse', np.nan))
-    sqrt_chi = _safe_float(
-        result.get('sqrt_chi2',
-                   result.get('sqrt_chi',
-                              result.get('sqrt_chi2_pg_per_mm2', np.nan)))
-    )
-    rmax_theory = _safe_float(
-        result.get('Rmax_theory',
-                   result.get('Rmax_theoretical',
-                              result.get('Rmax_theory_pg_per_mm2', np.nan)))
-    )
+    sqrt_chi = _safe_float(result.get('sigma_residual', np.nan))
 
     lines = [
         f'ka  = {ka:.3e}' if np.isfinite(ka) else 'ka  = n/a',
         f'kd  = {kd:.3e}' if np.isfinite(kd) else 'kd  = n/a',
-        f'KD  = {KD:.3e} M' if np.isfinite(KD) else 'KD  = n/a',
-        f'Rmax = {Rmax:.2f} pg/mm²' if np.isfinite(Rmax) else 'Rmax = n/a',
     ]
-    if np.isfinite(rmax_theory):
-        lines.append(f'Rmax theory = {rmax_theory:.2f} pg/mm²')
     if np.isfinite(rmse):
         lines.append(f'RMSE = {rmse:.3f}')
     if np.isfinite(sqrt_chi):
@@ -85,8 +82,16 @@ def _metric_lines_for_result(result, sample):
     return lines
 
 
-def _build_no_fit_reason(result, sample):
+def _build_no_fit_reason(result, sample, row=None):
     """Return a human-readable reason why a fit is unavailable."""
+    if row is not None:
+        error_value = row.get('error')
+        if error_value is not None and not (isinstance(error_value, float) and np.isnan(error_value)):
+            return str(error_value)
+        binding_value = row.get('binding')
+        if binding_value is False:
+            return 'No Binding'
+
     if result is not None and isinstance(result, dict):
         for key in ('reason', 'fit_reason', 'error', 'message', 'status'):
             value = result.get(key)
@@ -131,36 +136,6 @@ def _prefit_score_and_label(sample, result=None):
     return np.nan, 'unknown'
 
 
-def _plot_repeat_subplot(ax, sample, blank, result=None, mode='ode'):
-    """Draw a single repeat panel with raw traces on the left and fitted trace on the right."""
-    if result is None:
-        result = {}
-    if blank is not None:
-        _plot_raw_channels(ax, sample, blank)
-        return
-
-    if result.get('t') is not None and result.get('signal') is not None:
-        t = np.asarray(result.get('t'))
-        signal = np.asarray(result.get('signal'))
-        if t.size and signal.size:
-            ax.plot(t, signal, color='black', linewidth=0.8, label='Double reference')
-            ax.set_title('Double referenced signal', fontsize=11)
-            ax.set_xlabel('Time (s)')
-            ax.set_ylabel('Response (pg/mm²)')
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc='upper right', fontsize=9)
-            return
-
-    t = np.asarray(sample.get('time', []), dtype=float)
-    signal = np.asarray(sample.get('signal', []), dtype=float)
-    if t.size and signal.size:
-        ax.plot(t, signal - np.median(signal[:max(1, min(len(signal), 10))]), color='black', linewidth=0.8)
-    ax.set_title('Double referenced signal', fontsize=11)
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Response (pg/mm²)')
-    ax.grid(True, alpha=0.3)
-
-
 def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
     """Render the main fit panel for one repeat."""
     result = {} if result is None else result
@@ -203,9 +178,23 @@ def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
             f'pre-fit score = {score:.3f} ({label})' if np.isfinite(score) else 'pre-fit score = n/a',
             f'reason = {reason}',
         ]
-    ax.text(0.02, 0.98, '\n'.join(info_lines), transform=ax.transAxes,
-            fontsize=9, verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle='round,pad=0.35', facecolor='wheat', alpha=0.8))
+    KD = _safe_float(result.get('KD', np.nan))
+    Rmax = _safe_float(result.get('Rmax', np.nan))
+    affinity_label, affinity_color = _affinity_range_for_kd(KD)
+    affinity_lines = [
+        f'KD   = {KD:.3e} M' if np.isfinite(KD) else 'KD   = n/a',
+        f'Rmax = {Rmax:.2f} pg/mm²' if np.isfinite(Rmax) else 'Rmax = n/a',
+        f'Affinity range = {affinity_label}',
+    ]
+    ax.text(0.02, 0.98, '\n'.join(affinity_lines), transform=ax.transAxes,
+            fontsize=12, fontweight='bold', verticalalignment='top',
+            fontfamily='monospace',
+            bbox=dict(boxstyle='round,pad=0.35', facecolor=affinity_color,
+                      alpha=0.85, edgecolor='black'))
+
+    ax.text(0.02, 0.80, '\n'.join(info_lines), transform=ax.transAxes,
+            fontsize=10, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round,pad=0.35', facecolor='lightgrey', alpha=0.85))
 
     if result.get('success') is False:
         ax.text(0.5, 0.98, 'FIT FAILED', transform=ax.transAxes, fontsize=10,
@@ -283,29 +272,40 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None, blank=None):
     ax.set_ylabel('Response (pg/mm²)')
     ax.legend(loc='upper right', fontsize=10)
 
-    # Info box with kinetic parameters
+    # Primary metric box
     ka = result.get('ka', np.nan)
     kd = result.get('kd', np.nan)
-    KD = result.get('KD', np.nan)
-    Rmax = result.get('Rmax', np.nan)
     rmse = result.get('rmse', np.nan)
 
     info_lines = [
         f'ka  = {ka:.3e} M⁻¹s⁻¹',
         f'kd  = {kd:.3e} s⁻¹',
-        f'KD  = {KD:.3e} M',
-        f'Rmax = {Rmax:.2f} pg/mm²',
     ]
     if not fit_failed and np.isfinite(rmse):
         info_lines.append(f'RMSE = {rmse:.3f}')
 
+    KD = result.get('KD', np.nan)
+    Rmax = result.get('Rmax', np.nan)
+    affinity_label, affinity_color = _affinity_range_for_kd(KD)
+    affinity_lines = [
+        f'KD   = {KD:.3e} M',
+        f'Rmax = {Rmax:.2f} pg/mm²',
+        f'Affinity range = {affinity_label}',
+    ]
+    ax.text(0.02, 0.98, '\n'.join(affinity_lines),
+            transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', fontweight='bold',
+            fontfamily='monospace',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor=affinity_color,
+                      alpha=0.85, edgecolor='black'))
+
     info_text = '\n'.join(info_lines)
-    ax.text(0.02, 0.98, info_text,
+    ax.text(0.02, 0.56, info_text,
             transform=ax.transAxes, fontsize=10,
             verticalalignment='top',
             fontfamily='monospace',
-            bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat',
-                      alpha=0.8))
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='lightgrey',
+                      alpha=0.85))
 
     if fit_failed:
         ax.text(0.5, 0.98, 'FIT FAILED',
@@ -418,27 +418,55 @@ def save_fit_plots(df, samples, results, output_dir, mode='ode',
     return paths
 
 
+def _resolve_sample_and_result_for_row(row, samples, results):
+    """Resolve the matching sample + result for a DataFrame row."""
+    row_dict = row.to_dict() if hasattr(row, 'to_dict') else dict(row)
+    idx = row_dict.get('cycle_index', row_dict.get('index'))
+    ch = row_dict.get('channel', '')
+    rk_serie = row_dict.get('rk_serie_id', '')
+
+    matches = [(sample_index, sample) for sample_index, sample in enumerate(samples)
+               if sample.get('index') == idx
+               and sample.get('channel', '') == ch
+               and sample.get('rk_serie_id', '') == rk_serie]
+    if len(matches) > 1:
+        print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
+    if not matches:
+        return None, None, None
+
+    sample_index, sample = matches[0]
+    result = results[sample_index] if sample_index < len(results) else None
+    if result is not None and getattr(result, 'get', None) is None:
+        result = None
+    return sample, sample_index, result
+
+
+def _resolve_blank_for_row(row, sample, result, blanks):
+    """Resolve the blank using the row metadata before falling back to the result."""
+    blank = None
+    if row is not None:
+        blank = _find_selected_blank_from_row(row, blanks)
+    if blank is None and result is not None:
+        blank = _find_selected_blank(result, sample, blanks)
+    return blank
+
+
 def _save_fit_process(i, row, results, samples, mode, output_dir, blanks=None):
     """Helper for multiprocessing save_fit_plots."""
-    idx = row.get('cycle_index')
-    ch = row.get('channel', '')
-    rk_serie = row.get('rk_serie_id', '')
-    match_sample = [(sample_index, sample) for sample_index, sample in enumerate(samples)
-                    if sample['index'] == idx
-                    and sample.get('channel', '') == ch
-                    and sample.get('rk_serie_id', '') == rk_serie]
-    if len(match_sample) > 1:
-        print(f'WARNING! Multiple samples with RK serie {rk_serie}, cycle number {idx} and channel {ch}, plotting only the first match.')
-    elif len(match_sample) == 0:
+    row_dict = row.to_dict() if hasattr(row, 'to_dict') else dict(row)
+    idx = row_dict.get('cycle_index', row_dict.get('index'))
+    ch = row_dict.get('channel', '')
+    rk_serie = row_dict.get('rk_serie_id', '')
+
+    sample, _, result = _resolve_sample_and_result_for_row(row, samples, results)
+    if sample is None:
         print(f'WARNING! No sample found with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
-    sample_index, sample = match_sample[0]
-    result = results[sample_index] if sample_index < len(results) else None
+
     compound = sample.get('compound', 'Unknown')
     channel = sample.get('channel', ch)
     idx = sample.get('index', idx)
     rk_serie = sample.get('rk_serie_id', rk_serie)
-    # Sanitise compound name for filename
     safe_name = _sanitise_filename(compound)
     safe_ch = _sanitise_filename(channel) if channel else ''
     parts = [f'RK{rk_serie:02d}', f'{idx:03d}', safe_name]
@@ -450,7 +478,9 @@ def _save_fit_process(i, row, results, samples, mode, output_dir, blanks=None):
     if result is None:
         print(f'WARNING! No fit result for sample with RK serie {rk_serie}, cycle number {idx} and channel {ch}, skipping plot.')
         return None
-    blank = _find_selected_blank(result, sample, blanks)
+
+    blank = _resolve_blank_for_row(row_dict, sample, result, blanks)
+
     fig = plot_fit(
         result,
         sample,
@@ -461,36 +491,19 @@ def _save_fit_process(i, row, results, samples, mode, output_dir, blanks=None):
         fig.savefig(fpath, dpi=150, bbox_inches='tight')
         plt.close(fig)
         return fpath
-    else:
+    return None
+
+
+def _save_plot_process(rows, samples, results, mode, output_dir, blanks=None):
+    """Save a single triplicate subplot figure for one grouped DataFrame row set."""
+    rows = list(rows)
+    if not rows:
         return None
 
-
-def _group_triplicate_key(sample):
-    """Group repeat traces by the stable assay identity of one sample.
-
-    Real repeat samples share the same assay index and metadata, while each
-    replicate is carried on a different channel with different raw signals.
-    The key therefore includes the assay identity fields but excludes the
-    channel-specific raw arrays.
-    """
-    return (
-        sample.get('rk_serie_id'),
-        sample.get('index'),
-        sample.get('cycle_type'),
-        sample.get('compound', 'Unknown'),
-        sample.get('concentration_M'),
-        sample.get('mw'),
-    )
-
-
-def _save_plot_process(group_key, samples, results, mode, output_dir, blanks=None):
-    """Save a single triplicate subplot figure for one grouped sample."""
-    samples = list(samples)
-    if not samples:
-        return None
-    compound = samples[0].get('compound', 'Unknown')
-    rk_serie = samples[0].get('rk_serie_id', '')
-    cycle_index = samples[0].get('index', 0)
+    first_row = rows[0]
+    rk_serie = first_row.get('rk_serie_id', '')
+    cycle_index = first_row.get('cycle_index', first_row.get('index', 0))
+    compound = first_row.get('compound', 'Unknown')
     safe_name = _sanitise_filename(compound)
     fpath = os.path.join(output_dir, f'RK{rk_serie:02d}_{cycle_index:03d}_{safe_name}_{mode.upper()}_triplicate.png')
 
@@ -503,29 +516,22 @@ def _save_plot_process(group_key, samples, results, mode, output_dir, blanks=Non
             axes[row_idx, col_idx].grid(True, alpha=0.25)
             axes[row_idx, col_idx].set_axis_on()
 
-    for row_idx, sample in enumerate(samples[:3]):
-        result = None
-        for result_idx, candidate in enumerate(results):
-            if candidate is None:
-                continue
-            if getattr(candidate, 'get', None) is None:
-                continue
-            if candidate.get('blank_index') is not None:
-                pass
-            if _group_triplicate_key(sample) == _group_triplicate_key(samples[result_idx % len(samples)]):
-                result = candidate
-                break
-        blank = None
-        if result is not None:
-            blank = _find_selected_blank(result, sample, blanks)
+    for row_idx, row in enumerate(rows[:3]):
+        sample, _, result = _resolve_sample_and_result_for_row(row, samples, results)
+        if sample is None:
+            continue
+
+        blank = _resolve_blank_for_row(row, sample, result, blanks)
 
         ax_left = axes[row_idx, 0]
         ax_right = axes[row_idx, 1]
         ax_left.set_visible(True)
         ax_right.set_visible(True)
+
         if blank is not None:
             _plot_raw_channels(ax_left, sample, blank)
         else:
+            print(f'WARNING! No blank found for sample with RK serie {rk_serie}, cycle number {cycle_index} and channel {sample.get("channel", "")}, plotting raw signal only.')
             t = np.asarray(sample.get('time', []), dtype=float)
             signal = np.asarray(sample.get('raw_active', []), dtype=float)
             if t.size and signal.size:
@@ -536,21 +542,38 @@ def _save_plot_process(group_key, samples, results, mode, output_dir, blanks=Non
             ax_left.grid(True, alpha=0.3)
             ax_left.legend(loc='upper right', fontsize=9)
 
-        if result is None:
-            score, label = _prefit_score_and_label(sample)
-            reason = _build_no_fit_reason(None, sample)
-            if label != 'unknown' and np.isfinite(score):
-                ax_right.plot(np.asarray(sample.get('time', []), dtype=float), np.asarray(sample.get('raw_active', []), dtype=float), color='black', linewidth=0.8, label='Double reference')
-                ax_right.set_title('No fit available', fontsize=11)
-                ax_right.set_xlabel('Time (s)')
-                ax_right.set_ylabel('Response (pg/mm²)')
-                ax_right.grid(True, alpha=0.3)
-                ax_right.legend(loc='upper right', fontsize=9)
-                ax_right.text(0.02, 0.98, f'pre-fit score = {score:.3f} ({label})\nreason = {reason}', transform=ax_right.transAxes,
-                              fontsize=9, verticalalignment='top', fontfamily='monospace',
-                              bbox=dict(boxstyle='round,pad=0.35', facecolor='wheat', alpha=0.8))
-        else:
+        if result is not None and result.get('success') is True:
             _render_fit_panel(ax_right, sample, blank, result=result, mode=mode)
+            continue
+
+        score, label = _prefit_score_and_label(sample, result)
+        reason = _build_no_fit_reason(result, sample, row=row)
+        if reason == 'No Binding':
+            reason = 'No binding'
+
+        if result is not None:
+            t_double = np.asarray(result.get('t', sample.get('time', [])), dtype=float)
+            signal_double = np.asarray(result.get('signal', sample.get('raw_active', [])), dtype=float)
+        else:
+            t_double = np.asarray(sample.get('time', []), dtype=float)
+            signal_double = np.asarray(sample.get('raw_active', []), dtype=float)
+
+        if blank is not None and t_double.size and signal_double.size:
+            signal_double, _ = double_reference(sample, blank)
+            if signal_double.size:
+                ax_right.plot(t_double, signal_double, color='black', linewidth=0.8, label='Double reference')
+        elif t_double.size and signal_double.size:
+            ax_right.plot(t_double, signal_double, color='black', linewidth=0.8, label='Double reference')
+        ax_right.set_title('Double reference', fontsize=11)
+        ax_right.set_xlabel('Time (s)')
+        ax_right.set_ylabel('Response (pg/mm²)')
+        ax_right.grid(True, alpha=0.3)
+        ax_right.legend(loc='upper right', fontsize=9)
+
+        text = f'pre-fit score = {score:.3f} ({label})\nreason = {reason}' if np.isfinite(score) else f'reason = {reason}'
+        ax_right.text(0.02, 0.98, text, transform=ax_right.transAxes,
+                      fontsize=9, verticalalignment='top', fontfamily='monospace',
+                      bbox=dict(boxstyle='round,pad=0.35', facecolor='lightgrey', alpha=0.8))
 
     fig.suptitle(f'{compound} (RK{rk_serie:02d}, cycle {cycle_index})', fontsize=12)
     fig.tight_layout(rect=[0, 0.02, 1, 0.97])
@@ -563,46 +586,80 @@ def save_plot(df, samples, results, output_dir, mode='ode',
               n_parallel_jobs=None, blanks=None):
     """Save one grouped figure containing up to three replicate traces.
 
-    Repeats are identified by matching the assay identity fields carried by a
-    sample itself: ``rk_serie_id``, ``cycle_type``, ``compound``,
-    ``concentration_M`` and ``mw``. Sample ``index`` is not a repeat key because
-    each replicate has a different cycle number but the same assay identity.
-    Each row contains the raw traces in the left panel and the
-    double-referenced fit/no-fit view in the right panel.
+    Triplicates are first pooled from the DataFrame rows by the stable assay
+    identity shared across repeat samples in different channels, then each group
+    is resolved back to matching sample/result entries for plotting.
     """
     os.makedirs(output_dir, exist_ok=True)
-    grouped = {}
-    for sample in samples:
-        key = _group_triplicate_key(sample)
-        grouped.setdefault(key, []).append(sample)
 
-    group_items = list(grouped.items())
-    total = len(group_items)
+    grouped_rows = []
+    for _, row in df.iterrows():
+        key = (
+            row.get('rk_serie_id'),
+            row.get('cycle_index', row.get('index')),
+            row.get('cycle_type'),
+            row.get('compound'),
+            row.get('concentration_M'),
+            row.get('mw'),
+        )
+        for triplicate in grouped_rows:
+            first_row = triplicate[0]
+            existing_key = (
+                first_row.get('rk_serie_id'),
+                first_row.get('cycle_index', first_row.get('index')),
+                first_row.get('cycle_type'),
+                first_row.get('compound'),
+                first_row.get('concentration_M'),
+                first_row.get('mw'),
+            )
+            if existing_key == key:
+                triplicate.append(row)
+                break
+        else:
+            grouped_rows.append([row])
+
+    total = len(grouped_rows)
     if total:
         print(f'Generating grouped triplicate plots: 0/{total}', end='\r')
 
     if n_parallel_jobs:
         paths = Parallel(n_jobs=n_parallel_jobs, backend="multiprocessing")(
-            delayed(_save_plot_process)(key, value, [
-                results[i] if i < len(results) else None for i, sample in enumerate(samples)
-                if _group_triplicate_key(sample) == key
-            ], mode, output_dir, blanks)
-            for key, value in group_items
+            delayed(_save_plot_process)(rows, samples, results, mode, output_dir, blanks)
+            for rows in grouped_rows
         )
     else:
         paths = []
-        for progress_index, (key, value) in enumerate(group_items, start=1):
-            matching_results = [
-                results[i] if i < len(results) else None
-                for i, sample in enumerate(samples)
-                if _group_triplicate_key(sample) == key
-            ]
-            paths.append(_save_plot_process(key, value, matching_results, mode, output_dir, blanks))
+        for progress_index, rows in enumerate(grouped_rows, start=1):
+            paths.append(_save_plot_process(rows, samples, results, mode, output_dir, blanks))
             if total:
                 print(f'Generating grouped triplicate plots: {progress_index}/{total}', end='\r')
         if total:
             print(f'Generating grouped triplicate plots: {total}/{total}  ')
     return paths
+
+
+def _find_selected_blank_from_row(row, blanks):
+    """Find the blank for a row using the blank metadata stored in the DataFrame."""
+    if not blanks or row is None:
+        return None
+    blank_index = row.get('blank_index')
+    try:
+        blank_index_is_finite = bool(np.isfinite(blank_index))
+    except (TypeError, ValueError):
+        blank_index_is_finite = False
+    if blank_index is None or not blank_index_is_finite:
+        return None
+
+    candidates = [blank for blank in blanks if blank.get('index') == blank_index]
+    if not candidates:
+        return None
+
+    channel = row.get('channel')
+    rk_serie_id = row.get('rk_serie_id')
+    contextual = [blank for blank in candidates
+                  if blank.get('channel') == channel
+                  and blank.get('rk_serie_id') == rk_serie_id]
+    return contextual[0] if contextual else candidates[0]
 
 
 def _find_selected_blank(result, sample, blanks):
