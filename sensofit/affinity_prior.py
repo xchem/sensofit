@@ -24,6 +24,9 @@ RETENTION_COEFFICIENT = 1.0 / 3.0
 TAIL_SURVIVAL_COEFFICIENT = 0.15
 EARLY_DECAY_BIC_HALF_SATURATION = 100.0
 PERSISTENCE_COEFFICIENT = 0.5
+NO_BINDING_THRESHOLD = 0.8
+WEAK_THRESHOLD = 2.05
+MEDIUM_THRESHOLD = 2.97
 
 # A negative active-minus-reference endpoint is treated as differential
 # channel drift only when the earlier trace already contains independent
@@ -75,6 +78,19 @@ class AffinityAreaPrior:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def _score_to_affinity_label(score):
+    """Map a pre-fit affinity score to the benchmark label vocabulary."""
+    if score is None or not np.isfinite(score):
+        return 'unknown'
+    if score < NO_BINDING_THRESHOLD:
+        return 'no binding'
+    if score < WEAK_THRESHOLD:
+        return 'weak'
+    if score < MEDIUM_THRESHOLD:
+        return 'medium'
+    return 'tight'
 
 
 def _window_mean(t, values, start, stop):

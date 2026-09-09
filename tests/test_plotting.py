@@ -17,6 +17,7 @@ from sensofit.plotting import (
     _sanitise_filename,
     plot_fit,
     save_fit_plots,
+    save_plot,
 )
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
@@ -181,6 +182,57 @@ class TestSaveFitPlots:
 
             assert paths[0] is not None
             assert os.path.isfile(paths[0])
+
+    def test_save_plot_groups_triplicate_samples(self):
+        t = np.arange(4, dtype=float)
+        samples = [
+            {
+                'index': 10, 'channel': 'FC2-FC1', 'rk_serie_id': 5,
+                'compound': 'alpha', 'concentration_M': 1e-6,
+                'time': t, 'raw_active': np.array([0.0, 1.0, 2.0, 3.0]),
+                'raw_reference': np.array([0.0, 0.5, 1.0, 1.5]),
+                'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0},
+                'baseline_duration_s': 0.5,
+            },
+            {
+                'index': 10, 'channel': 'FC3-FC1', 'rk_serie_id': 5,
+                'compound': 'alpha', 'concentration_M': 1e-6,
+                'time': t, 'raw_active': np.array([0.0, 1.1, 2.1, 3.1]),
+                'raw_reference': np.array([0.0, 0.6, 1.1, 1.6]),
+                'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0},
+                'baseline_duration_s': 0.5,
+            },
+            {
+                'index': 10, 'channel': 'FC4-FC1', 'rk_serie_id': 5,
+                'compound': 'alpha', 'concentration_M': 1e-6,
+                'time': t, 'raw_active': np.array([0.0, 1.2, 2.2, 3.2]),
+                'raw_reference': np.array([0.0, 0.7, 1.2, 1.7]),
+                'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0},
+                'baseline_duration_s': 0.5,
+            },
+        ]
+        results = []
+        for sample in samples:
+            results.append({
+                't': t, 'signal': np.array([0.0, 1.0, 2.0, 3.0]),
+                'R_fit': np.array([0.0, 1.0, 2.0, 3.0]),
+                'ka': 1e3, 'kd': 1e-3, 'KD': 1e-6, 'Rmax': 10.0,
+                'rmse': 0.1, 'sqrt_chi2': 0.2,
+                'success': True,
+                'blank_index': 9,
+            })
+
+        df = pd.DataFrame([
+            {'cycle_index': s['index'], 'channel': s['channel'], 'rk_serie_id': s['rk_serie_id'], 'compound': s['compound']}
+            for s in samples
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = save_plot(df, samples, results, tmpdir, mode='ode', blanks=[{'index': 9, 'time': t, 'signal': np.zeros_like(t), 'markers': {'Injection': 1.0, 'Rinse': 2.0, 'RinseEnd': 3.0}, 'baseline_duration_s': 0.5}])
+            assert len(paths) == 1
+            assert paths[0] is not None
+            assert os.path.isfile(paths[0])
+            assert paths[0].endswith('.png')
 
 
 class TestSanitiseFilename:

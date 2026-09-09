@@ -26,7 +26,7 @@ import time
 import pandas as pd
 
 from .batch import batch_fit, flag_poor_fits
-from .plotting import save_fit_plots
+from .plotting import save_fit_plots, save_plot
 from .dataexporter import export_package
 from .package_loader import load_experiment
 from .models import select_blank, _get_binding_response, fit_last_disso
@@ -68,7 +68,7 @@ def _run_gui():
 
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
               n_parallel_jobs=None, fast=True, blank_selection='current',
-              rng_seed=None):
+              rng_seed=None, only_plot_fits=False):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -84,7 +84,7 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
                                   rng_seed=rng_seed)
     if df.empty:
         return df
-    
+
     # Add source file info
     df.insert(0, 'source_file', os.path.basename(filepath))
 
@@ -93,11 +93,18 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
 
     # Save plots
     samples = data['samples']
+    blanks = data['blanks']
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
-    paths = save_fit_plots(df, samples, results,
-                            plot_dir, mode=mode,
-                            n_parallel_jobs=n_parallel_jobs,
-                            blanks=data['blanks'])
+    if only_plot_fits:
+        paths = save_fit_plots(df, samples, results,
+                               plot_dir, mode=mode,
+                               n_parallel_jobs=n_parallel_jobs,
+                               blanks=blanks)
+    else:
+        paths = save_plot(df, samples, results,
+                          plot_dir, mode=mode,
+                          n_parallel_jobs=n_parallel_jobs,
+                          blanks=blanks)
     n_plots = sum(1 for p in paths if p is not None)
     print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 
@@ -312,6 +319,11 @@ def main(argv=None):
         help='Base random seed for reproducible ODE multi-start fits. Each '
              'sample receives a deterministic offset. Default: unset.',
     )
+    parser.add_argument(
+        '--only-plot-fits', action='store_true', default=False,
+        help='Use the legacy per-sample fit plot saver instead of the grouped '
+             'triplicate plot output. Default: False.',
+    )
 
     args = parser.parse_args(argv)
 
@@ -331,7 +343,8 @@ def main(argv=None):
                            n_parallel_jobs=args.n_parallel_jobs,
                            fast=args.fast,
                            blank_selection=args.blank_selection,
-                           rng_seed=args.rng_seed)
+                           rng_seed=args.rng_seed,
+                           only_plot_fits=args.only_plot_fits)
             if df.empty:
                 continue
             all_dfs.append(df)
