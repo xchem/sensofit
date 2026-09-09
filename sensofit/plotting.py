@@ -163,7 +163,7 @@ def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
         ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
                 linestyle='--', label='DK smooth')
 
-    ax.set_title('Fit and double reference', fontsize=11)
+    ax.set_title('Double referenced sensorgram and fit', fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Response (pg/mm²)')
     ax.grid(True, alpha=0.3)
@@ -368,10 +368,10 @@ def _plot_raw_channels(ax, sample, blank):
                 label='Blank')
 
     blank_index = blank.get('index')
-    blank_title = 'Raw channels and selected blank'
+    title = f'{sample["channel"]} raw sensorgrams'
     if blank_index is not None:
-        blank_title += f' (cycle {blank_index})'
-    ax.set_title(blank_title, fontsize=11)
+        title += f' (blank cycle {blank_index})'
+    ax.set_title(title, fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Response (pg/mm²)')
     ax.legend(loc='upper right', fontsize=9)
