@@ -58,8 +58,11 @@ def _parse_concentration(s: str) -> float:
 
 
 def _parse_mw(s: str) -> float:
-    """Parse '455 Da' → 455.0."""
+    """Parse '455 Da' → 455.0 OR '1 kDa' → 1000.0."""
     s = s.strip()
+    if s.endswith('kDa'):
+        s = s[:-3].strip()
+        return float(s) * 1000.0 if s else 0.0
     if s.endswith('Da'):
         s = s[:-2].strip()
     return float(s) if s else 0.0
