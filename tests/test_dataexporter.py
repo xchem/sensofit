@@ -11,12 +11,15 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import pandas as pd
+
 from sensofit.dataexporter import (
     _cycle_folder_name,
     _format_concentration,
     _sanitize,
     export_cxw,
     export_package,
+    remap,
 )
 
 CXW = os.path.join(os.path.dirname(__file__), '..',
@@ -70,6 +73,64 @@ class TestHelpers:
         name = _cycle_folder_name(cyc)
         assert name.startswith('Control__')
         assert '__cyc009' in name
+
+    def test_remap_updates_autosampler_and_samples(self, tmp_path):
+        platemap = tmp_path / 'platemap.csv'
+        platemap.write_text(
+            'Pos,Designation,Concentration,MW\n'
+            'A1,Cmpd-ID-001,25 uM,500\n'
+            'B2,Cmpd-ID-002,100 nM,750\n'
+        )
+
+        data = {
+            'autosampler': [{
+                'reagents': [
+                    {'slot': 'A1', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10},
+                    {'slot': 'B2', 'designation': 'other', 'concentration_raw': '1 uM', 'concentration_M': 1e-6, 'mw_Da': 20},
+                    {'slot': 'C3', 'designation': 'keep', 'concentration_raw': '2 uM', 'concentration_M': 2e-6, 'mw_Da': 30},
+                ]
+            }],
+            'samples': [
+                {'slot': 'A1', 'name': 'old name', 'compound': 'old compound', 'concentration_M': 1e-3, 'mw': 10},
+                {'slot': 'B2', 'name': 'other name', 'compound': 'other compound', 'concentration_M': 1e-6, 'mw': 20},
+                {'slot': 'C3', 'name': 'unchanged', 'compound': 'keep', 'concentration_M': 2e-6, 'mw': 30},
+            ]
+        }
+
+        remap(data, str(platemap))
+
+        assert data['autosampler'][0]['reagents'][0]['slot'] == 'A1'
+        assert data['autosampler'][0]['reagents'][0]['designation'] == 'Cmpd-ID-001'
+        assert data['autosampler'][0]['reagents'][0]['concentration_raw'] == '25 uM'
+        assert data['autosampler'][0]['reagents'][0]['concentration_M'] == pytest.approx(25e-6)
+        assert data['autosampler'][0]['reagents'][0]['mw_Da'] == 500
+
+        assert data['samples'][0]['name'] == 'Cmpd-ID-001'
+        assert data['samples'][0]['compound'] == 'Cmpd-ID-001'
+        assert data['samples'][0]['concentration_M'] == pytest.approx(25e-6)
+        assert data['samples'][0]['mw'] == 500
+
+        assert data['autosampler'][0]['reagents'][2]['designation'] == 'keep'
+        assert data['samples'][2]['name'] == 'unchanged'
+
+    def test_remap_accepts_xlsx_platemap(self, tmp_path):
+        platemap = tmp_path / 'platemap.xlsx'
+        pd.DataFrame([
+            {'Pos': 'A1', 'Designation': 'Cmpd-ID-001', 'Concentration': '25 uM', 'MW': 500},
+            {'Pos': 'B2', 'Designation': 'Cmpd-ID-002', 'Concentration': '100 nM', 'MW': 750},
+        ]).to_excel(platemap, index=False)
+
+        data = {
+            'autosampler': [{'reagents': [{'slot': 'A1', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10}]}],
+            'samples': [{'slot': 'A1', 'name': 'old', 'compound': 'old', 'concentration_M': 1e-3, 'mw': 10}],
+        }
+
+        remap(data, str(platemap))
+
+        assert data['autosampler'][0]['reagents'][0]['designation'] == 'Cmpd-ID-001'
+        assert data['autosampler'][0]['reagents'][0]['concentration_M'] == pytest.approx(25e-6)
+        assert data['samples'][0]['compound'] == 'Cmpd-ID-001'
+        assert data['samples'][0]['mw'] == 500
 
 
 @pytest.mark.skipif(not os.path.isfile(CXW),
@@ -160,6 +221,17 @@ class TestExportPackage:
     def test_export_package_requires_input(self, tmp_path):
         with pytest.raises(ValueError):
             export_package([], str(tmp_path / 'empty.zip'))
+
+    def test_export_package_remapped_suffix(self, tmp_path):
+        platemap = tmp_path / 'platemap.csv'
+        platemap.write_text('Pos,Designation,Concentration,MW\nA1,Cmpd-ID-001,25 uM,500\n')
+        out_zip = tmp_path / 'demo_pkg.zip'
+
+        result = export_package([CXW], str(out_zip), package_name='demo_pkg',
+                                platemap=str(platemap))
+
+        assert result.endswith('_remapped.zip')
+        assert os.path.isfile(result)
 
 
 @pytest.mark.skipif(not os.path.isfile(CXW),

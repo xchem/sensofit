@@ -23,6 +23,7 @@ import os
 import sys
 import time
 
+import numpy as np
 import pandas as pd
 
 from .batch import batch_fit, flag_poor_fits
@@ -139,11 +140,18 @@ def _run_export(argv):
     parser.add_argument('--name', default=None,
                         help='Package name (used in README and as the top-'
                              'level folder inside the zip).')
+    parser.add_argument('--platemap', '-p', default=None,
+                        help='Optional plate-map CSV or XLSX file to remap '
+                             'autosampler/sample metadata before export. '
+                             'When used, the output archive gets a "_remapped" suffix.')
     args = parser.parse_args(argv)
 
     cxw_files = _expand_cxw_inputs(args.paths)
     if not cxw_files:
         print('No .cxw files found.', file=sys.stderr)
+        sys.exit(1)
+    if args.platemap and not os.path.isfile(args.platemap):
+        print(f'Plate map file not found: {args.platemap}', file=sys.stderr)
         sys.exit(1)
 
     output = args.output
@@ -154,7 +162,8 @@ def _run_export(argv):
     print(f'Exporting {len(cxw_files)} .cxw file(s)...')
     for f in cxw_files:
         print(f'  - {os.path.basename(f)}')
-    out_path = export_package(cxw_files, output, package_name=args.name)
+    out_path = export_package(cxw_files, output, package_name=args.name,
+                             platemap=args.platemap)
     print(f'Wrote package: {out_path}')
 
 

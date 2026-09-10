@@ -31,6 +31,8 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from .data_loader import load_cxw
 
 
@@ -64,6 +66,120 @@ def _format_concentration(M: float) -> str:
     if abs(val - round(val)) < 1e-6:
         return f'{int(round(val))}{unit}'
     return f'{val:g}{unit}'
+
+
+def _parse_plate_concentration(raw: str) -> float:
+    """Parse concentration strings like ``25 uM`` or ``100 nM`` to M."""
+    if raw is None:
+        return 0.0
+    s = str(raw).strip()
+    if not s:
+        return 0.0
+    match = re.search(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-zµμu]*)', s)
+    if not match:
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+    value = float(match.group(1))
+    unit = (match.group(2) or '').strip().lower().replace('μ', 'u').replace('µ', 'u')
+    if unit in ('', 'm', 'molar', 'molar'):
+        return value
+    if unit in ('mm',):
+        return value * 1e-3
+    if unit in ('um', 'u'):
+        return value * 1e-6
+    if unit == 'nm':
+        return value * 1e-9
+    if unit == 'pm':
+        return value * 1e-12
+    if unit == 'm':
+        return value
+    try:
+        return float(s)
+    except ValueError:
+        return value
+
+
+def _parse_plate_mw(raw) -> float:
+    """Parse a plate-map MW field like ``500`` or ``500 Da``."""
+    if raw is None:
+        return 0.0
+    s = str(raw).strip()
+    if not s:
+        return 0.0
+    match = re.search(r'([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)', s)
+    if not match:
+        return 0.0
+    return float(match.group(1))
+
+
+def _read_platemap_rows(platemap: str) -> list[dict]:
+    """Read a plate map from CSV or XLSX and normalise it to row dicts."""
+    path = str(platemap)
+    lower = path.lower()
+    if lower.endswith('.xlsx') or lower.endswith('.xls'):
+        df = pd.read_excel(path)
+    else:
+        df = pd.read_csv(path)
+
+    rows = []
+    for _, row in df.iterrows():
+        rows.append({str(k): v for k, v in row.to_dict().items()})
+    return rows
+
+
+def remap(data: dict, platemap: str) -> dict:
+    """Overwrite reagent/sample metadata to match a plate-map CSV or XLSX.
+
+    The plate map is expected to contain at least the columns
+    ``Pos, Designation, Concentration, MW``.  Matching is done on the
+    autosampler/reagent ``slot`` field and sample ``slot`` field.
+    """
+    if data is None:
+        return data
+
+    rows = _read_platemap_rows(platemap)
+    lookup = {}
+    for row in rows:
+        pos = (row.get('Pos') or row.get('pos') or '').strip()
+        if not pos:
+            continue
+        designation = (row.get('Designation') or row.get('designation') or '').strip()
+        concentration_raw = (row.get('Concentration') or row.get('concentration') or '').strip()
+        concentration_M = _parse_plate_concentration(concentration_raw)
+        mw_Da = _parse_plate_mw(row.get('MW') or row.get('mw'))
+        lookup[pos.upper()] = {
+            'slot': pos,
+            'designation': designation,
+            'concentration_raw': concentration_raw,
+            'concentration_M': concentration_M,
+            'mw_Da': mw_Da,
+        }
+
+    for serie in data.get('autosampler', []) or []:
+        for reagent in serie.get('reagents', []) or []:
+            pos = str(reagent.get('slot') or '').strip()
+            info = lookup.get(pos.upper())
+            if info is None:
+                continue
+            reagent['slot'] = info['slot']
+            reagent['designation'] = info['designation']
+            reagent['concentration_raw'] = info['concentration_raw']
+            reagent['concentration_M'] = info['concentration_M']
+            reagent['mw_Da'] = info['mw_Da']
+
+    for sample in data.get('samples', []) or []:
+        pos = str(sample.get('slot') or '').strip()
+        info = lookup.get(pos.upper())
+        if info is None:
+            continue
+        sample['name'] = info['designation']
+        sample['compound'] = info['designation']
+        sample['concentration_M'] = info['concentration_M']
+        sample['mw'] = info['mw_Da']
+
+    return data
 
 
 def _cycle_label(cyc: dict) -> str:
@@ -339,13 +455,15 @@ def _write_kinetics_csv(path: str, rows: list) -> None:
             w.writerow(clean)
 
 
-def export_cxw(cxw_path: str, out_dir: str) -> dict:
+def export_cxw(cxw_path: str, out_dir: str, platemap: str | None = None) -> dict:
     """Export one .cxw file's raw data into ``out_dir/{basename}/``.
 
     Returns a small dict summarising what was written; it is the basis
     for the auto-generated README.
     """
     data = load_cxw(cxw_path, channels='all')
+    if platemap:
+        remap(data, platemap)
     basename = _sanitize(os.path.splitext(os.path.basename(cxw_path))[0])
     cxw_root = os.path.join(out_dir, basename)
     os.makedirs(cxw_root, exist_ok=True)
@@ -785,7 +903,8 @@ def _zip_directory(src_dir: str, output_zip: str) -> None:
 
 
 def export_package(cxw_paths, output_zip: str,
-                   package_name: str | None = None) -> str:
+                   package_name: str | None = None,
+                   platemap: str | None = None) -> str:
     """Export N ``.cxw`` files into a single self-describing zip package.
 
     Parameters
@@ -798,6 +917,10 @@ def export_package(cxw_paths, output_zip: str,
         Human-readable name used in the README header and as the
         directory name *inside* the zip.  Defaults to the output zip's
         basename without extension.
+    platemap : str, optional
+        Plate-map CSV or XLSX file used to remap autosampler/sample metadata
+        before export. When present, the output archive name gets an
+        ``_remapped`` suffix.
 
     Returns
     -------
@@ -808,7 +931,13 @@ def export_package(cxw_paths, output_zip: str,
     if not cxw_paths:
         raise ValueError('export_package: no .cxw files supplied')
 
-    if not output_zip.lower().endswith('.zip'):
+    if platemap:
+        if not output_zip.lower().endswith('.zip'):
+            output_zip = output_zip + '.zip'
+        base, ext = os.path.splitext(output_zip)
+        if not base.lower().endswith('_remapped'):
+            output_zip = f'{base}_remapped{ext}'
+    elif not output_zip.lower().endswith('.zip'):
         output_zip = output_zip + '.zip'
 
     if package_name is None:
@@ -819,7 +948,7 @@ def export_package(cxw_paths, output_zip: str,
     pkg_root = os.path.join(tmp_root, package_name_safe)
     os.makedirs(pkg_root, exist_ok=True)
     try:
-        summaries = [export_cxw(p, pkg_root) for p in cxw_paths]
+        summaries = [export_cxw(p, pkg_root, platemap=platemap) for p in cxw_paths]
         readme = _render_readme(summaries, package_name)
         with open(os.path.join(pkg_root, 'README.md'), 'w') as fh:
             fh.write(readme)

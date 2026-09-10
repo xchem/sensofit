@@ -81,6 +81,40 @@ Package raw signal data from one or more `.cxw` files into a self-describing zip
 (per-CXW folders → per-cycle folders → one CSV per `FCx-FCy` channel pair, plus
 `metadata.json` sidecars, `experiment.json`, and an auto-generated `README.md`).
 
+
+#### Plate-map remapping
+
+A SensoFit experiment can be remapped to a user-supplied well map during export.
+The plate map must contain, at minimum, these columns:
+
+```csv
+Pos,Designation,Concentration,MW
+A1,Cmpd-ID-001,25 uM,500
+B2,Cmpd-ID-002,100 nM,750
+```
+
+When a `platemap` is supplied, the exporter updates:
+
+- each reagent entry in `data["autosampler"][i]["reagents"]`
+  - `slot`
+  - `designation`
+  - `concentration_raw`
+  - `concentration_M`
+  - `mw_Da`
+- each sample entry in `data["samples"]`
+  - `name`
+  - `compound`
+  - `concentration_M`
+  - `mw`
+
+The output archive name is automatically suffixed with `_remapped` when the remap option is used, for example:
+
+```text
+my_dataset_remapped.zip
+```
+
+The plate map can be provided as either a CSV or an Excel workbook (`.xlsx` / `.xls`).
+
 ```bash
 # Single file → auto-named zip (sensofit_package_<timestamp>.zip)
 python -m sensofit export experiment.cxw
@@ -88,6 +122,16 @@ python -m sensofit export experiment.cxw
 # Multiple files / directories → custom output zip and package name
 python -m sensofit export file1.cxw file2.cxw data_folder/ \
     -o /tmp/my_dataset.zip --name my_dataset
+
+# Remap an experiment to a plate map before packaging
+# accepts CSV or XLSX and appends '_remapped' to the archive name
+python -m sensofit export experiment.cxw \
+    -o /tmp/remapped_dataset.zip \
+    --name remapped_dataset \
+    --platemap plate_map.csv
+
+# XLSX plate map works too
+python -m sensofit export experiment.cxw --platemap plate_map.xlsx
 ```
 
 Equivalent Python API:
@@ -98,6 +142,12 @@ from sensofit import export_package
 export_package(['file1.cxw', 'file2.cxw'],
                '/tmp/my_dataset.zip',
                package_name='my_dataset')
+
+# Remap autosampler/sample metadata using a plate map before export
+export_package(['experiment.cxw'],
+               '/tmp/remapped_dataset.zip',
+               package_name='my_dataset',
+               platemap='plate_map.csv')
 ```
 
 ### CSV columns
