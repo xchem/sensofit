@@ -85,15 +85,15 @@ class TestHelpers:
         data = {
             'autosampler': [{
                 'reagents': [
-                    {'slot': 'A1', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10},
-                    {'slot': 'B2', 'designation': 'other', 'concentration_raw': '1 uM', 'concentration_M': 1e-6, 'mw_Da': 20},
-                    {'slot': 'C3', 'designation': 'keep', 'concentration_raw': '2 uM', 'concentration_M': 2e-6, 'mw_Da': 30},
+                    {'slot': 'A1', 'category': 'Subject', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10},
+                    {'slot': 'B2', 'category': 'Control', 'designation': 'other', 'concentration_raw': '1 uM', 'concentration_M': 1e-6, 'mw_Da': 20},
+                    {'slot': 'C3', 'category': 'Subject', 'designation': 'keep', 'concentration_raw': '2 uM', 'concentration_M': 2e-6, 'mw_Da': 30},
                 ]
             }],
             'samples': [
-                {'slot': 'A1', 'name': 'old name', 'compound': 'old compound', 'concentration_M': 1e-3, 'mw': 10},
-                {'slot': 'B2', 'name': 'other name', 'compound': 'other compound', 'concentration_M': 1e-6, 'mw': 20},
-                {'slot': 'C3', 'name': 'unchanged', 'compound': 'keep', 'concentration_M': 2e-6, 'mw': 30},
+                {'slot': 'A1', 'cycle_type': 'Sample', 'name': 'old name', 'compound': 'old compound', 'concentration_M': 1e-3, 'mw': 10},
+                {'slot': 'B2', 'cycle_type': 'ControlSample', 'name': 'other name', 'compound': 'other compound', 'concentration_M': 1e-6, 'mw': 20},
+                {'slot': 'C3', 'cycle_type': 'Sample', 'name': 'unchanged', 'compound': 'keep', 'concentration_M': 2e-6, 'mw': 30},
             ]
         }
 
@@ -110,7 +110,9 @@ class TestHelpers:
         assert data['samples'][0]['concentration_M'] == pytest.approx(25e-6)
         assert data['samples'][0]['mw'] == 500
 
+        assert data['autosampler'][0]['reagents'][1]['designation'] == 'other'
         assert data['autosampler'][0]['reagents'][2]['designation'] == 'keep'
+        assert data['samples'][1]['name'] == 'other name'
         assert data['samples'][2]['name'] == 'unchanged'
 
     def test_remap_accepts_xlsx_platemap(self, tmp_path):
@@ -121,8 +123,8 @@ class TestHelpers:
         ]).to_excel(platemap, index=False)
 
         data = {
-            'autosampler': [{'reagents': [{'slot': 'A1', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10}]}],
-            'samples': [{'slot': 'A1', 'name': 'old', 'compound': 'old', 'concentration_M': 1e-3, 'mw': 10}],
+            'autosampler': [{'reagents': [{'slot': 'A1', 'category': 'Subject', 'designation': 'old', 'concentration_raw': '1 mM', 'concentration_M': 1e-3, 'mw_Da': 10}]}],
+            'samples': [{'slot': 'A1', 'cycle_type': 'Sample', 'name': 'old', 'compound': 'old', 'concentration_M': 1e-3, 'mw': 10}],
         }
 
         remap(data, str(platemap))

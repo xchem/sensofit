@@ -159,6 +159,8 @@ def remap(data: dict, platemap: str) -> dict:
 
     for serie in data.get('autosampler', []) or []:
         for reagent in serie.get('reagents', []) or []:
+            if str(reagent.get('category') or '').strip() != 'Subject':
+                continue
             pos = str(reagent.get('slot') or '').strip()
             info = lookup.get(pos.upper())
             if info is None:
@@ -170,6 +172,8 @@ def remap(data: dict, platemap: str) -> dict:
             reagent['mw_Da'] = info['mw_Da']
 
     for sample in data.get('samples', []) or []:
+        if str(sample.get('cycle_type') or '').strip() != 'Sample':
+            continue
         pos = str(sample.get('slot') or '').strip()
         info = lookup.get(pos.upper())
         if info is None:
