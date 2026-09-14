@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from .batch import batch_fit, flag_poor_fits
-from .plotting import save_fit_plots, save_plot
+from .plotting import save_fit_plots, save_plots
 from .dataexporter import export_package
 from .package_loader import load_experiment
 from .models import select_blank, _get_binding_response, fit_last_disso

@@ -163,7 +163,7 @@ def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
         ax.plot(t, result['R_smooth'], color='grey', linewidth=0.8,
                 linestyle='--', label='DK smooth')
 
-    ax.set_title('Double referenced sensorgram and fit', fontsize=11)
+    ax.set_title(f'{sample["channel"]} double referenced sensorgram and fit', fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Response (pg/mm²)')
     ax.grid(True, alpha=0.3)
@@ -582,7 +582,7 @@ def _save_plot_process(rows, samples, results, mode, output_dir, blanks=None):
     return fpath
 
 
-def save_plot(df, samples, results, output_dir, mode='ode',
+def save_plots(df, samples, results, output_dir, mode='ode',
               n_parallel_jobs=None, blanks=None):
     """Save one grouped figure containing up to three replicate traces.
 
