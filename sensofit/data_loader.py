@@ -8,13 +8,93 @@ A .cxw file is a ZIP archive containing:
   - Correctors/     : XML with timing/offset corrections (not used here)
 """
 
+import json
 import re
 import zipfile
 import io
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import numpy as np
 import h5py
+
+
+def _median_edge(values, first=True, n_points=50):
+    """Return a robust level near one edge of a capture trace."""
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    edge = values[:n_points] if first else values[-n_points:]
+    return float(np.median(edge))
+
+
+def estimate_capture_levels(data):
+    """Estimate net captured ligand response for each flow cell.
+
+    The immobilization traces are absolute instrument responses. Net capture
+    is estimated from the start of the first available immobilization cycle
+    to the end of the last. Wizard target levels are used as a fallback,
+    followed by explicitly documented sidecar imputations. Measured or
+    Wizard-derived values always take precedence over imputed values.
+    """
+    levels = {}
+    immobilizations = data.get("immobilizations") or []
+    for serie in immobilizations:
+        cycles = serie.get("cycles") or []
+        for fc_number in range(1, 5):
+            fc = f"FC{fc_number}"
+            traces = []
+            for cycle in cycles:
+                values = (cycle.get("capture_level") or {}).get(fc)
+                if values is not None and np.asarray(values).size:
+                    traces.append(values)
+            if traces:
+                start = _median_edge(traces[0], first=True)
+                end = _median_edge(traces[-1], first=False)
+                captured = end - start
+                if np.isfinite(captured) and captured > 0:
+                    levels[fc] = float(captured)
+
+        lookup = serie.get("immobilization_lookup") or {}
+        for fc, info in (lookup.get("channels") or {}).items():
+            if fc in levels or not info:
+                continue
+            try:
+                target = float(info.get("capture_level"))
+            except (TypeError, ValueError):
+                continue
+            if target > 0:
+                levels[fc] = target
+
+    metadata = data.get("capture_level_metadata") or {}
+    for fc, value in (metadata.get("capture_levels_pg_per_mm2") or {}).items():
+        if fc not in levels:
+            value = float(value)
+            if np.isfinite(value) and value > 0:
+                levels[fc] = value
+    return levels
+
+
+def _load_capture_level_metadata(filepath: str) -> dict:
+    """Load optional <cxw stem>.capture_levels.json metadata."""
+    sidecar = Path(filepath).with_suffix('.capture_levels.json')
+    if not sidecar.is_file():
+        return {}
+    with sidecar.open(encoding='utf-8') as handle:
+        metadata = json.load(handle)
+    levels = metadata.get('capture_levels_pg_per_mm2') or {}
+    for fc, value in levels.items():
+        if not re.fullmatch(r'FC[1-4]', str(fc)):
+            raise ValueError(f'Invalid flow cell in {sidecar}: {fc!r}')
+        if not np.isfinite(float(value)) or float(value) <= 0:
+            raise ValueError(
+                f'Capture level for {fc} in {sidecar} must be positive')
+    metadata['capture_levels_pg_per_mm2'] = {
+        str(fc): float(value) for fc, value in levels.items()
+    }
+    metadata['sidecar'] = str(sidecar)
+    return metadata
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +1001,8 @@ def load_cxw(filepath: str, channels='all') -> dict:
             Full ordered list of all RAPID Kinetics cycle metadata
             (without signal data).
     """
+    capture_level_metadata = _load_capture_level_metadata(filepath)
+
     with zipfile.ZipFile(filepath, 'r') as zf:
         project = _parse_xml(zf, '_project.cx3')
 
@@ -1042,4 +1124,5 @@ def load_cxw(filepath: str, channels='all') -> dict:
         'other_cycles': other_cycles,
         'all_cycles': all_cycles,
         'evaluations': evaluations,
+        'capture_level_metadata': capture_level_metadata,
     }

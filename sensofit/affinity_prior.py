@@ -11,7 +11,23 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 import numpy as np
+from scipy.integrate import trapezoid
 
+
+REGIME_PKD_BOUNDS = {
+    # Overlap conventional cut-offs: this coarse score proposes a basin, not a class.
+    "no_binding": (2.0, 6.0),
+    "weak": (2.0, 5.5),
+    "medium": (4.0, 6.5),
+    # pKD 14 is the optimizer's physical maximum (ka <= 1e8, kd >= 1e-6).
+    "tight": (6.0, 14.0),
+}
+
+# Only binding regimes propose a constrained basin.
+PREFIT_BASIN_PKD_BOUNDS = {
+    key: value for key, value in REGIME_PKD_BOUNDS.items()
+    if key != "no_binding"
+}
 
 # The original concentration, selectivity and retention coefficients were a
 # non-negative least-squares fit to ordered experimentalist labels, then
@@ -38,43 +54,65 @@ TAIL_DRIFT_SHRINKAGE_SNR = 3.0
 END_GUARD_SECONDS = 5.0
 
 
+REGIME_SCORE_THRESHOLDS = {
+    "no_binding_to_weak": 0.80,
+    "weak_to_medium": 2.05,
+    "medium_to_tight": 2.97,
+}
+
+
+def _validate_prefit_thresholds(thresholds):
+    thresholds = np.asarray(
+        tuple(REGIME_SCORE_THRESHOLDS.values()) if thresholds is None else thresholds,
+        dtype=float)
+    if (thresholds.shape != (3,) or not np.isfinite(thresholds).all()
+            or np.any(np.diff(thresholds) <= 0)):
+        raise ValueError("prefit_thresholds must contain three finite, increasing scores")
+    return thresholds
+
+
 @dataclass(frozen=True)
 class AffinityAreaPrior:
-    """Affinity score and its component diagnostics."""
+    """Pre-fit affinity regime and its raw-channel evidence."""
 
-    score: float
-    concentration_M: float
-    baseline_noise: float
-    association_active_mean: float
-    association_reference_mean: float
-    association_between_mean: float
-    late_association_between_mean: float
-    early_dissociation_active_mean: float
-    early_dissociation_reference_mean: float
-    early_dissociation_between_mean: float
-    raw_tail_dissociation_between_mean: float
-    tail_dissociation_between_mean: float
-    late_dissociation_between_mean: float
-    tail_drift_corrected: bool
-    tail_drift_weight: float
-    tail_drift_slope: float
-    tail_endpoint_between: float
-    early_decay_delta_bic: float
-    early_decay_amplitude: float
-    early_decay_koff: float
-    early_decay_reference_scale: float
-    response_scale: float
-    early_dissociation_fraction: float
-    association_selectivity: float
-    retention_ratio: float
-    tail_survival_ratio: float
-    concentration_evidence: float
-    selectivity_evidence: float
-    retention_evidence: float
-    tail_survival_evidence: float
-    early_decay_evidence: float
-    retained_tail_fraction: float
-    persistence_evidence: float
+    usable: bool = False
+    reason: str = ""
+    regime: str = "unknown"
+    score: float = np.nan
+    pKD_lower: float = np.nan
+    pKD_upper: float = np.nan
+    concentration_M: float = np.nan
+    baseline_noise: float = np.nan
+    association_active_mean: float = np.nan
+    association_reference_mean: float = np.nan
+    association_between_mean: float = np.nan
+    late_association_between_mean: float = np.nan
+    early_dissociation_active_mean: float = np.nan
+    early_dissociation_reference_mean: float = np.nan
+    early_dissociation_between_mean: float = np.nan
+    raw_tail_dissociation_between_mean: float = np.nan
+    tail_dissociation_between_mean: float = np.nan
+    late_dissociation_between_mean: float = np.nan
+    tail_drift_corrected: bool = False
+    tail_drift_weight: float = 0.0
+    tail_drift_slope: float = np.nan
+    tail_endpoint_between: float = np.nan
+    early_decay_delta_bic: float = np.nan
+    early_decay_amplitude: float = np.nan
+    early_decay_koff: float = np.nan
+    early_decay_reference_scale: float = np.nan
+    response_scale: float = np.nan
+    early_dissociation_fraction: float = np.nan
+    association_selectivity: float = np.nan
+    retention_ratio: float = np.nan
+    tail_survival_ratio: float = np.nan
+    concentration_evidence: float = np.nan
+    selectivity_evidence: float = np.nan
+    retention_evidence: float = np.nan
+    tail_survival_evidence: float = np.nan
+    early_decay_evidence: float = np.nan
+    retained_tail_fraction: float = np.nan
+    persistence_evidence: float = np.nan
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -104,7 +142,11 @@ def _window_mean(t, values, start, stop):
     duration = float(selected_t[-1] - selected_t[0])
     if duration <= 0:
         return np.nan
-    return float(np.trapezoid(values[mask], selected_t) / duration)
+    return float(trapezoid(values[mask], selected_t) / duration)
+
+
+def _unusable(reason, concentration=np.nan):
+    return AffinityAreaPrior(reason=reason, concentration_M=concentration)
 
 
 def _early_decay_reference_evidence(
@@ -161,13 +203,16 @@ def _early_decay_reference_evidence(
     return delta_bic, best[1], best[2], best[3]
 
 
-def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
+def estimate_affinity_area_prior(sample, *, prefit_thresholds=None,
+                                 end_guard_s=END_GUARD_SECONDS,
+                                 tail_endpoint_window_s=3.0) -> AffinityAreaPrior:
     """Characterise a trace before kinetic fitting.
 
     The monotonic score combines concentration, association selectivity,
     early retention, tail survival, bounded decay-model evidence and absolute
     retained-tail persistence.
     """
+    thresholds = _validate_prefit_thresholds(prefit_thresholds)
     try:
         concentration = float(sample["concentration_M"])
     except (KeyError, TypeError, ValueError) as error:
@@ -175,7 +220,7 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
             "sample must contain a numeric concentration_M"
         ) from error
     if not np.isfinite(concentration) or concentration <= 0:
-        raise ValueError("concentration_M must be finite and positive")
+        return _unusable("non_positive_concentration", concentration)
 
     try:
         t = np.asarray(sample["time"], dtype=float)
@@ -186,14 +231,12 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
         rinse = float(markers["Rinse"])
         rinse_end = float(markers["RinseEnd"])
     except (KeyError, TypeError, ValueError):
-        raise ValueError(
-            "sample must contain raw_active, raw_reference, time, and markers"
-        ) from None
+        return _unusable("missing_raw_channels_or_markers", concentration)
     if (
         t.ndim != 1 or active.shape != t.shape or reference.shape != t.shape
         or not injection < rinse < rinse_end
     ):
-        raise ValueError("raw channels or marker times are invalid")
+        return _unusable("invalid_raw_channels_or_markers", concentration)
 
     baseline = (
         np.isfinite(t) & np.isfinite(active) & np.isfinite(reference)
@@ -201,7 +244,7 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
         & (t <= injection - 2.0)
     )
     if baseline.sum() < 5:
-        raise ValueError("trace has insufficient pre-injection baseline")
+        return _unusable("insufficient_baseline", concentration)
     active = active - float(np.median(active[baseline]))
     reference = reference - float(np.median(reference[baseline]))
     between = active - reference
@@ -212,7 +255,7 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
 
     association_start = injection + 0.5
     association_stop = rinse - 0.5
-    analysis_end = rinse_end - END_GUARD_SECONDS
+    analysis_end = rinse_end - end_guard_s
     early_stop = min(rinse + 10.0, analysis_end)
     late_start = max(rinse + 1.0, rinse_end - 20.0)
     windows = {
@@ -237,7 +280,7 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
             t, between, late_start, analysis_end),
     }
     if not np.isfinite(list(windows.values())).all():
-        raise ValueError("trace has insufficient data in a scoring window")
+        return _unusable("insufficient_window_data", concentration)
 
     response_scale = max(
         abs(windows["association_active_mean"])
@@ -270,7 +313,7 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
     # Use the final 3 s before the end guard as the endpoint.  A longer window
     # can be centred inside the 30--60 s tail itself and consequently subtract
     # away genuine curvature/retention that the correction should preserve.
-    endpoint_start = max(rinse + 1.0, analysis_end - 3.0)
+    endpoint_start = max(rinse + 1.0, analysis_end - tail_endpoint_window_s)
     endpoint = _window_mean(t, between, endpoint_start, analysis_end)
     endpoint_time = 0.5 * (endpoint_start + analysis_end)
     eligible_tail_drift = bool(
@@ -372,7 +415,17 @@ def estimate_affinity_area_prior(sample) -> AffinityAreaPrior:
         + early_decay_evidence
         + persistence_evidence
     )
+    if score < thresholds[0]:
+        regime = "no_binding"
+    elif score < thresholds[1]:
+        regime = "weak"
+    elif score < thresholds[2]:
+        regime = "medium"
+    else:
+        regime = "tight"
+    lower, upper = REGIME_PKD_BOUNDS[regime]
     return AffinityAreaPrior(
+        usable=True, regime=regime, pKD_lower=lower, pKD_upper=upper,
         score=score,
         concentration_M=concentration,
         baseline_noise=noise,

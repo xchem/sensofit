@@ -242,7 +242,12 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None, blank=None):
             fig, ax = plt.subplots(figsize=(8, 5))
 
     # Data trace
-    ax.plot(t, signal, color='black', linewidth=0.8, label='Sensorgram')
+    joint_reference = bool(result.get('joint_channel_projection', False))
+    signal_label = 'Blank-corrected active' if joint_reference else 'Sensorgram'
+    ax.plot(t, signal, color='black', linewidth=0.8, label=signal_label)
+    if joint_reference and result.get('binding_fit') is not None:
+        ax.plot(t, result['binding_fit'], color='green', linewidth=1.0,
+                label='Binding component')
 
     # Model fit trace
     R_fit = result.get('R_fit')
@@ -299,6 +304,10 @@ def plot_fit(result, sample, mode='ode', ax=None, title=None, blank=None):
             bbox=dict(boxstyle='round,pad=0.4', facecolor=affinity_color,
                       alpha=0.85, edgecolor='black'))
 
+    if result.get('prefit_basin_selection_enabled', False):
+        info_lines.append(f"Pre-fit: {result.get('affinity_area_regime', 'unknown')}")
+        if result.get('prefit_basin_bound_hit', False):
+            info_lines.append('pKD at pre-fit basin boundary')
     info_text = '\n'.join(info_lines)
     ax.text(0.02, 0.56, info_text,
             transform=ax.transAxes, fontsize=10,

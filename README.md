@@ -223,3 +223,7 @@ python -m sensofit.benchmark run --data-dir data --mode dk \
 
 See [docs/experimentalist_benchmark.md](docs/experimentalist_benchmark.md) for
 the task definitions, prediction contract, metrics, and ODE command.
+
+## Current joint-reference fitting method
+
+Use `ode_fit_variant="joint_reference_offset_prefit_basin"` in `batch_fit`, or `--ode-fit-variant joint_reference_offset_prefit_basin` in the CLI. See the [method documentation](docs/current_fitting_method.md) for commands, fitting settings, input requirements, and reporting gates. The historical fitter remains the default.
