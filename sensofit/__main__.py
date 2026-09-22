@@ -69,8 +69,9 @@ def _run_gui():
 
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
               n_parallel_jobs=None, fast=True, blank_selection='current',
-              rng_seed=None, only_plot_fits=False, ode_fit_variant='legacy',
-              prefit_thresholds=None, fit_no_binding=False, max_cost_ratio=1.1):
+              rng_seed=None, ligand_mw=None, only_plot_fits=False,
+              ode_fit_variant='legacy', prefit_thresholds=None, 
+              fit_no_binding=False, max_cost_ratio=1.1):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -84,9 +85,11 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
                                   n_parallel_jobs=n_parallel_jobs, fast=fast,
                                   blank_selection=blank_selection,
                                   rng_seed=rng_seed,
+                                  ligand_mw=ligand_mw,
                                   ode_fit_variant=ode_fit_variant,
                                   prefit_thresholds=prefit_thresholds,
-                                  fit_no_binding=fit_no_binding, max_cost_ratio=max_cost_ratio)
+                                  fit_no_binding=fit_no_binding, 
+                                  max_cost_ratio=max_cost_ratio)
     if df.empty:
         return df
 
@@ -333,27 +336,37 @@ def main(argv=None):
              'sample receives a deterministic offset. Default: unset.',
     )
     parser.add_argument(
+        '--ligand-mw', type=float, default=None,
+        help='Molecular weight of the ligand (molecule immobilised on the sensor surface) '
+             'in Daltons (Da). This is used to calculate the theoretical Rmax. If provided '
+             'by the user, `ligand_mw` will override the value from the metadata.',
+    )
+    parser.add_argument(
         '--only-plot-fits', action='store_true', default=False,
         help='Use the legacy per-sample fit plot saver instead of the grouped '
              'triplicate plot output. Default: False.',
     )
-
     parser.add_argument(
         '--ode-fit-variant',
         choices=['legacy', 'joint_reference_offset_prefit_basin'],
-        default='legacy',
+        default='joint_reference_offset_prefit_basin',
         help='Use legacy fitting or the current per-channel joint-reference '
-             'method with physical bounds and pre-fit basin selection.',
+             'method with physical bounds and pre-fit basin selection. ' \
+             'Default: joint_reference_offset_prefit_basin.',
     )
     parser.add_argument(
         '--prefit-thresholds', nargs=3, type=float, metavar=('WEAK', 'MEDIUM', 'TIGHT'),
-        help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.')
+        help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.'
+    )
     parser.add_argument(
         '--fit-no-binding', action='store_true',
-        help='Fit pre-fit no-binding traces; retain other exclusion checks.')
+        help='Fit pre-fit no-binding traces; retain other exclusion checks.'
+    )
     parser.add_argument(
         '--max-cost-ratio', type=float, default=1.1,
-        help='Current-method constrained/unrestricted cost limit (>= 1). Default: 1.1.')
+        help='Current-method constrained/unrestricted cost limit (>= 1). Default: 1.1.'
+    )
+    
     args = parser.parse_args(argv)
 
     cxw_files = _find_cxw_files(args.input)
@@ -373,10 +386,12 @@ def main(argv=None):
                            fast=args.fast,
                            blank_selection=args.blank_selection,
                            rng_seed=args.rng_seed,
+                           ligand_mw=args.ligand_mw,
                            only_plot_fits=args.only_plot_fits,
                            ode_fit_variant=args.ode_fit_variant,
                            prefit_thresholds=args.prefit_thresholds,
-                           fit_no_binding=args.fit_no_binding, max_cost_ratio=args.max_cost_ratio)
+                           fit_no_binding=args.fit_no_binding, 
+                           max_cost_ratio=args.max_cost_ratio)
             if df.empty:
                 continue
             all_dfs.append(df)

@@ -49,12 +49,14 @@ def _metric_lines_for_result(result, sample):
         result = {}
     ka = _safe_float(result.get('ka', np.nan))
     kd = _safe_float(result.get('kd', np.nan))
+    Rmax_theory = _safe_float(result.get('Rmax_theory', np.nan))
     rmse = _safe_float(result.get('rmse', np.nan))
     sqrt_chi = _safe_float(result.get('sigma_residual', np.nan))
 
     lines = [
-        f'ka  = {ka:.3e}' if np.isfinite(ka) else 'ka  = n/a',
-        f'kd  = {kd:.3e}' if np.isfinite(kd) else 'kd  = n/a',
+        f'ka  = {ka:.3e} M⁻¹s⁻¹' if np.isfinite(ka) else 'ka  = n/a',
+        f'kd  = {kd:.3e} s⁻¹' if np.isfinite(kd) else 'kd  = n/a',
+        f'Rmax_theory = {Rmax_theory:.2f} pg/mm²' if np.isfinite(Rmax_theory) else 'Rmax_theory = n/a',
     ]
     if np.isfinite(rmse):
         lines.append(f'RMSE = {rmse:.3f}')
@@ -179,10 +181,12 @@ def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
             f'reason = {reason}',
         ]
     KD = _safe_float(result.get('KD', np.nan))
+    pKD = -np.log10(KD) if np.isfinite(KD) and KD > 0 else np.nan
     Rmax = _safe_float(result.get('Rmax', np.nan))
     affinity_label, affinity_color = _affinity_range_for_kd(KD)
     affinity_lines = [
         f'KD   = {KD:.3e} M' if np.isfinite(KD) else 'KD   = n/a',
+        f'pKD  = {pKD:.2f}' if np.isfinite(pKD) else 'pKD  = n/a',
         f'Rmax = {Rmax:.2f} pg/mm²' if np.isfinite(Rmax) else 'Rmax = n/a',
         f'Affinity range = {affinity_label}',
     ]
@@ -192,7 +196,7 @@ def _render_fit_panel(ax, sample, blank, result=None, mode='ode'):
             bbox=dict(boxstyle='round,pad=0.35', facecolor=affinity_color,
                       alpha=0.85, edgecolor='black'))
 
-    ax.text(0.02, 0.80, '\n'.join(info_lines), transform=ax.transAxes,
+    ax.text(0.02, 0.78, '\n'.join(info_lines), transform=ax.transAxes,
             fontsize=10, verticalalignment='top', fontfamily='monospace',
             bbox=dict(boxstyle='round,pad=0.35', facecolor='lightgrey', alpha=0.85))
 

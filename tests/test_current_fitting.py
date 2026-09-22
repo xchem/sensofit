@@ -84,8 +84,13 @@ def test_skip_policy_requires_the_agreed_evidence(regime, identifiable, injectio
     (None, False, 1.1, "unknown", 100.0, 0.0),
     (None, False, 1.1, "unknown", 100.0, -1e-6),
 ])
+@pytest.mark.parametrize("user_ligand_mw, expected_ligand_mw, expected_origin", [
+    (None, 60000.0, "from_metadata"),
+    (45000.0, 45000.0, "user_defined"),
+])
 def test_batch_prefit_controls(monkeypatch, thresholds, override, ratio,
-                              regime, cost, concentration):
+                              regime, cost, concentration, user_ligand_mw,
+                              expected_ligand_mw, expected_origin):
     t = np.arange(0.0, 81.0, 0.5)
     markers = dict(Injection=5.0, Rinse=40.0, RinseEnd=80.0)
     sample = dict(index=3, rk_serie_id="1", channel="FC2-FC1", cycle_type="Sample",
@@ -110,8 +115,11 @@ def test_batch_prefit_controls(monkeypatch, thresholds, override, ratio,
     frame, _, results = batch.batch_fit(
         "synthetic.cxw", mode="ode", progress=False,
         ode_fit_variant="joint_reference_offset_prefit_basin", rng_seed=0,
-        prefit_thresholds=thresholds, fit_no_binding=override, max_cost_ratio=ratio)
+        prefit_thresholds=thresholds, fit_no_binding=override,
+        max_cost_ratio=ratio, ligand_mw=user_ligand_mw)
     result, row = results[0], frame.iloc[0]
+    assert row["ligand_mw_Da"] == expected_ligand_mw
+    assert row["ligand_mw_origin"] == expected_origin
     assert row["affinity_area_regime"] == regime
     assert row["prefit_basin_cost_ratio_max"] == ratio
     if cost is None:

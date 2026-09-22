@@ -660,7 +660,15 @@ def fit_sample(sample, dmso, blank=None, initial_estimates="PHYSICAL", n_starts=
     t = sample["time"]
     signal, blank_index = double_reference(sample, blank)
     physical_seed = prefit_basin = None
-    fallback = float(sample.get("concentration_M", 0.0)) <= 0
+    Rmax_theory_estimated = False
+    try:
+        Rmax_theory = theoretical_rmax(capture_level, ligand_mw_Da, float(sample.get("mw", np.nan)))
+        Rmax_theory_estimated = True if Rmax_theory > 0 else False
+    except Exception:
+        print(f'WARNING! Could not estimate theoretical Rmax for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
+              f'channel {sample.get("channel", "")}). Using fallback seeds instead...')
+        Rmax_theory = np.nan
+    fallback = float(sample.get("concentration_M", 0.0)) <= 0 or not Rmax_theory_estimated
     if fallback:
         seed_method = "control_defaults"
         ka_seed, kd_seed, Rmax_seed = 1e3, 1e-3, 10.0

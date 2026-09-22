@@ -600,7 +600,7 @@ def has_injection_issue(sample: dict, percent_threshold: float = 15.0):
     return inj_issue, (delta_ref, delta_active)
 
 
-def is_reference_response_negative(sample: dict, percent_threshold: float = 10.0):
+def is_reference_response_negative(sample: dict, percent_threshold: float = 50.0):
     """Detect negative response in reference channel, 
     which will affect signal interpretation.
     
@@ -610,7 +610,7 @@ def is_reference_response_negative(sample: dict, percent_threshold: float = 10.0
         Sample cycle from load_cxw().
     percent_threshold : float
         Threshold for the negative response in the reference channel.
-        Default 10.0% times of -max_abs_signal.
+        Default 50.0% times of -max_abs_signal.
 
     Returns
     -------
@@ -634,10 +634,10 @@ def is_reference_response_negative(sample: dict, percent_threshold: float = 10.0
     return min_response < ref_inj_mean - (percent_threshold / 100.0 * max_abs_signal), ref_inj_mean
 
 
-def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0, time_window: float = 10.0):
-    """Detect sample carryover at the end of the cycle.
+def is_sample_accumulated(sample: dict, signal: np.ndarray, percent_threshold: float = 10.0, time_window: float = 10.0):
+    """Detect sample accumulation at the end of the cycle.
     Get the mean of the baseline-subtracted signal in the last X seconds of the cycle, 
-    and if it is above the threshold, there is probably carryover.
+    and if it is above the threshold, there is probably accumulation.
 
     Parameters
     ----------
@@ -646,15 +646,15 @@ def is_sample_carried_over(sample: dict, signal: np.ndarray, percent_threshold: 
     signal : np.ndarray
         Double-referenced (or baseline-subtracted) signal from sample.
     percent_threshold : float
-        Threshold for the signal at the end of the cycle above which there is probably carryover. 
+        Threshold for the signal at the end of the cycle above which there is probably accumulation. 
         Default 10.0% of the maximum abs(signal) value.
     time_window : float
-        The duration (in seconds) of the time window at the end of the cycle to consider for carryover detection. 
+        The duration (in seconds) of the time window at the end of the cycle to consider for accumulation detection. 
         Default 10.0.
 
     Returns
     -------
-    carryover : bool
+    accumulation : bool
         True if signal at the end of the cycle > threshold.
     end_signal : float
         Baseline-subtracted signal at the end of the cycle, used for assessment.    
@@ -697,7 +697,7 @@ def has_low_signal_to_noise_reponse(sample: dict, signal: np.ndarray, snr_thresh
     return (bind_resp / contact_std) <= snr_threshold if contact_std != 0.0 else False, bind_resp
 
 
-def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_threshold: float = 5.0):
+def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.00, percent_threshold: float = 5.0):
     """Detect non-specific binding from the reference channel.
 
     Non-specific binders show significant analyte retention on the
@@ -713,7 +713,7 @@ def is_nonspecific_binder(sample: dict, koff_threshold: float = 1.25, percent_th
         Sample cycle from load_cxw().
     koff_threshold : float
         Threshold for the dissociation constant of the reference channel.
-        Default 1.25 s⁻¹.
+        Default 1.00 s⁻¹.
      percent_threshold : float
         Threshold for the baseline-subtracted signal in the raw_reference channel 
         above which the sample is classified as a non-specific binder (in case 

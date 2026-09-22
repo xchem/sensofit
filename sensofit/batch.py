@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 from .data_loader import load_cxw, estimate_capture_levels
 from .package_loader import load_experiment
 from .models import (is_baseline_noisy, has_injection_issue, is_reference_response_negative,
-                     is_sample_carried_over, has_low_signal_to_noise_reponse, is_nonspecific_binder,
+                     is_sample_accumulated, has_low_signal_to_noise_reponse, is_nonspecific_binder,
                      double_reference, select_blank, select_dmso_cal,
                      prepare_blanks, get_weight_from_derivative)
 from .direct_kinetics import fit_sample as dk_fit_sample
@@ -25,7 +25,8 @@ from .ode_fitting import fit_sample as ode_fit_sample
 
 def batch_fit(filepath, mode='dk', channels='all', progress=True,
               n_starts=3, n_parallel_jobs=None, fast=True,
-              blank_selection='current', rng_seed=None, subset_csv=None,
+              blank_selection='current', rng_seed=None, 
+              ligand_mw=None, subset_csv=None,
               ode_fit_variant='legacy', prefit_thresholds=None,
               fit_no_binding=False, max_cost_ratio=1.1):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
@@ -108,12 +109,15 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
     dmso_cals = data['dmso_cals']
     blanks = prepare_blanks(data['blanks'], selection=blank_selection)
     data['blanks'] = blanks
+    ligand_mw_origin = "from_metadata" if ligand_mw is None else "user_defined"
+    ligand_mw = ligand_mw if ligand_mw is not None else (data.get('project') or {}).get('ligand_mw_Da')
 
     if mode not in ('dk', 'ode'):
         raise ValueError(f"mode must be 'dk' or 'ode', got {mode!r}")
 
     if ode_fit_variant not in {'legacy', 'joint_reference_offset_prefit_basin'}:
         raise ValueError(f'unknown ODE fitting method: {ode_fit_variant}')
+    
     n_parallel_jobs = n_parallel_jobs if mode != 'dk' else None
 
     fit_func = dk_fit_sample if mode == 'dk' else ode_fit_sample
@@ -124,7 +128,7 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         fit_func = fit_sample
         current_metadata = (
             estimate_capture_levels(data),
-            (data.get('project') or {}).get('ligand_mw_Da'),
+            ligand_mw,
             _validate_prefit_thresholds(prefit_thresholds), fit_no_binding,
             _validate_max_cost_ratio(max_cost_ratio),
         )
@@ -142,13 +146,13 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         all_results = Parallel(n_jobs=n_parallel_jobs, backend=backend)(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                     fit_func, n_starts, fast, blank_selection,
-                                    rng_seed, current_metadata)
+                                    rng_seed, current_metadata, ligand_mw_origin)
             for i, sample in enumerate(samples)
         )
     else:
         all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                       fit_func, n_starts, fast, blank_selection,
-                                      rng_seed, current_metadata)
+                                      rng_seed, current_metadata, ligand_mw_origin)
                        for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
@@ -174,7 +178,7 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
 
 def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func,
                    n_starts, fast=True, blank_selection='current', rng_seed=None,
-                   current_metadata=None):
+                   current_metadata=None, ligand_mw_origin="from_metadata"):
     """Process a single sample with error handling and NSB filtering."""
     current = current_metadata is not None
     if progress and not current:
@@ -216,7 +220,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
         row['injection_issue'] = True if "injection_issue" in heuristics else False
-        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['accumulation'] = True if "sample_accumulation" in heuristics else False
+        row['ligand_mw_Da'] = current_metadata[1] if current_metadata is not None else np.nan
+        row['ligand_mw_origin'] = ligand_mw_origin
         row['error'] = np.nan
         row['success'] = np.nan
         row.update(skip_fields)
@@ -238,7 +244,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
         row['injection_issue'] = True if "injection_issue" in heuristics else False
-        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['accumulation'] = True if "sample_accumulation" in heuristics else False
+        row['ligand_mw_Da'] = current_metadata[1] if current_metadata is not None else np.nan
+        row['ligand_mw_origin'] = ligand_mw_origin
         row['error'] = np.nan
     except Exception as e:
         row = _fallback_row(sample, mode)
@@ -247,7 +255,9 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
         row['non_specific'] = True if "non_specific_interaction" in heuristics else False
         row['noisy'] = True if "noisy" in heuristics else False
         row['injection_issue'] = True if "injection_issue" in heuristics else False
-        row['carryover'] = True if "sample_carryover" in heuristics else False
+        row['accumulation'] = True if "sample_accumulation" in heuristics else False
+        row['ligand_mw_Da'] = current_metadata[1] if current_metadata is not None else np.nan
+        row['ligand_mw_origin'] = ligand_mw_origin
         row['error'] = str(e)
         if current:
             row['success'] = np.nan
@@ -260,6 +270,7 @@ def _add_blank_metadata(target, blank):
     """Record the blank selected for double referencing."""
     target['blank_index'] = blank.get('index') if blank else np.nan
 
+
 def _extract_row(sample, result, mode):
     """Build a flat dict from sample metadata + fit results."""
     row = {
@@ -270,18 +281,19 @@ def _extract_row(sample, result, mode):
         'compound':         sample['compound'],
         'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':               sample.get('mw'),
+        'analyte_mw_Da':    sample.get('mw'),
         'slot':             sample.get('slot'),
-        'ka':           result['ka'],
-        'kd':           result['kd'],
-        'Rmax':         result['Rmax'],
-        'KD':           result['KD'],
-        'KD_uM':        result['KD'] * 1e6,
-        'rmse':         result.get('rmse', np.nan),
-        'sigma_res':    result['sigma_residual'],
-        'n_points':     result.get('n_points', 0),
-        'blank_index':  result['blank_index'],
-        'dmso_index':   result['dmso_index'],
+        'ka':               result['ka'],
+        'kd':               result['kd'],
+        'Rmax':             result['Rmax'],
+        'Rmax_theory':      result.get('Rmax_theory', np.nan),
+        'KD':               result['KD'],
+        'KD_uM':            result['KD'] * 1e6,
+        'rmse':             result.get('rmse', np.nan),
+        'sigma_res':        result['sigma_residual'],
+        'n_points':         result.get('n_points', 0),
+        'blank_index':      result['blank_index'],
+        'dmso_index':       result['dmso_index'],
     }
 
     if mode == 'dk':
@@ -327,7 +339,7 @@ def _fallback_row(sample, mode):
         'compound':         sample['compound'],
         'concentration_M':  sample['concentration_M'],
         'concentration_uM': sample['concentration_M'] * 1e6,
-        'mw':               sample.get('mw'),
+        'analyte_mw_Da':    sample.get('mw'),
         'slot':             sample.get('slot'),
         'cycle_index':      sample['index'],
         'channel':          sample.get('channel', ''),
@@ -335,6 +347,7 @@ def _fallback_row(sample, mode):
         'ka':               np.nan,
         'kd':               np.nan,
         'Rmax':             np.nan,
+        'Rmax_theory':      np.nan,
         'KD':               np.nan,
         'KD_uM':            np.nan,
         'rmse':             np.nan,
@@ -353,7 +366,7 @@ def sensorgram_heuristics(sample, blank=None):
     - Injection issue: -10% of max(abs(signal)) > signal before injection > 10% of max(abs(signal))
     - Negative signal in reference channel: min signal < 5% of -max(abs(reference signal))
     - Low signal-to-noise response: binding response < 5% of max(abs(signal))
-    - Sample carryover: steady-state signal > 10% of max(abs(signal))
+    - Sample accumulation: steady-state signal > 10% of max(abs(signal))
     - Non-specific binding: signal after rinse in reference channel > 2.5% of max(abs(reference signal))
     """
     signal, _ = double_reference(sample, blank)
@@ -371,9 +384,9 @@ def sensorgram_heuristics(sample, blank=None):
     low_snr, _ = has_low_signal_to_noise_reponse(sample, signal)
     if low_snr:
         heuristics.append('low_signal_to_noise_response')
-    carryover, _ = is_sample_carried_over(sample, signal)
-    if carryover:
-        heuristics.append('sample_carryover')
+    accumulation, _ = is_sample_accumulated(sample, signal)
+    if accumulation:
+        heuristics.append('sample_accumulation')
     nsb, _ = is_nonspecific_binder(sample)
     if nsb:
         heuristics.append('non_specific_interaction')
