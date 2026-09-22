@@ -15,9 +15,8 @@ Initialised from Direct Kinetics estimates; refines ka, kd, Rmax.
 
 import numpy as np
 from scipy.optimize import least_squares
-from .models import (build_pulsed_concentration_profile, select_dmso_cal,
-                     build_full_weight_mask, simulate_sensorgram,
-                     trim_to_fit_window)
+from .models import (build_pulsed_concentration_profile, double_reference, build_full_weight_mask, 
+                     simulate_sensorgram, trim_to_fit_window, fit_last_disso, fit_last_asso, get_rmse)
 from .direct_kinetics import fit_sample as dk_fit_sample
 
 
@@ -35,16 +34,18 @@ def _residuals(params, t_dissoc, signal_dissoc, t0):
     return signal_dissoc - R_model
 
 
-def _residuals_full(params, t, signal, c_func, w):
+def _residuals_full(params, t, signal, c_func, w, fast=True):
     """Full ODE residuals (weighted).
 
     Optimises (ka, kd, Rmax) simultaneously.
     """
     ka, kd, Rmax = params
-    R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0)
+    R_sim = simulate_sensorgram(t, ka, kd, Rmax, c_func, R0=0.0,
+                                fast=fast)
     return w * (signal - R_sim)
 
-def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params=None, t=None, c_func=None, sqrt=False):
+def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None,
+          params=None, t=None, c_func=None, sqrt=False, fast=True):
     """Calculate Chi2 from ODE residuals.
     
     Chi2 = sum((w * residuals)^2) / (N - n_params)
@@ -53,7 +54,8 @@ def _chi2(residuals=None, w=None, n_params=None, R_sim=None, signal=None, params
         if R_sim is not None:
             residuals = w * (signal - R_sim)
         else:
-            residuals = _residuals_full(params, t, signal, c_func, w)
+            residuals = _residuals_full(params, t, signal, c_func, w,
+                                        fast=fast)
 
     n_points = int((w > 0).sum()) if w is not None else len(residuals)    
     chi2 = np.sum(residuals**2)/(n_points - max(n_params, 1))
@@ -75,7 +77,7 @@ def _solve_R0_Rss(kd, t_dissoc, signal_dissoc, t0):
 
 
 def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
-            n_starts=1, rng_seed=None, skip_s=1.0):
+            n_starts=1, rng_seed=None, skip_s=1.0, fast=True):
     """Fit 1:1 Langmuir parameters via DK-seeded ODE refinement.
 
     Three-phase approach:
@@ -103,6 +105,9 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         Random seed for reproducibility.  None (default) = non-reproducible.
     skip_s : float
         Seconds to skip after rinse onset to avoid transport lag.
+    fast : bool
+        Use the stable two-half-step exponential propagator when true
+        (default), or the legacy adaptive RK45 solver when false.
     """
     kd_final = max(kd0, 1e-5)  # kd pinned from DK
 
@@ -151,7 +156,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         try:
             opt = least_squares(
                 _residuals_full, p0,
-                args=(t, signal, c_func, w),
+                args=(t, signal, c_func, w, fast),
                 bounds=(lb_full, ub_full),
                 method='trf',
                 ftol=1e-6, xtol=1e-6, gtol=1e-6,
@@ -165,11 +170,14 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
 
     if not fits:
         # Fallback: use derived estimates
-        R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func, R0=0.0)
+        R_fit = simulate_sensorgram(t, ka_est, kd_final, Rmax_est, c_func,
+                                    R0=0.0, fast=fast)
+        fit_mask = np.isfinite(R_fit)
+        rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
         return {
             'ka': ka_est, 'kd': kd_final, 'Rmax': Rmax_est,
             'KD': kd_final / ka_est,
-            'sqrt_chi2': np.nan,
+            'rmse': np.nan,
             'R0': R0_est, 'Rss': Rss_est,
             'ka_se': np.nan, 'kd_se': np.nan, 'Rmax_se': np.nan,
             'cov': np.full((3, 3), np.nan),
@@ -179,7 +187,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
             'n_points': int((w > 0).sum()),
             'cost': np.nan, 'nfev': 0,
             'n_converged': 0, 'n_starts': n_starts,
-            'success': False, 'message': 'All ODE fits failed',
+            'success': False, 'message': 'All ODE fits failed', 'fast': fast,
         }
 
     # Median aggregation over converged ODE fits
@@ -205,7 +213,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
     
     params = [ka_final_val, kd_final_val, Rmax_final]
     residuals = _residuals_full(
-        params, t, signal, c_func, w)
+        params, t, signal, c_func, w, fast=fast)
     n = int((w > 0).sum())
     dof = max(n - 3, 1)
     sigma2 = np.sum(residuals ** 2) / dof
@@ -221,16 +229,16 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         pass
 
     R_fit = simulate_sensorgram(t, ka_final_val, kd_final_val, Rmax_final,
-                                c_func, R0=0.0)
-
-    sqrt_chi2 = _chi2(residuals=residuals, n_params=len(params), w=w, sqrt=True)
+                                c_func, R0=0.0, fast=fast)
+    fit_mask = np.isfinite(R_fit)
+    rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
 
     return {
         'ka': ka_final_val,
         'kd': kd_final_val,
         'Rmax': Rmax_final,
         'KD': KD,
-        'sqrt_chi2': sqrt_chi2,
+        'rmse': rmse,
         'R0': R0_est,
         'Rss': Rss_est,
         'ka_se': ka_se,
@@ -250,23 +258,27 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0,
         'nfev': total_nfev,
         'success': True,
         'message': f'{len(fits)}/{n_starts} ODE starts converged',
+        'fast': fast,
     }
 
 
-def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
-               smoothing_factor=None, neg_ss_correction=False, association_weight=0.0, n_starts=1):
+def fit_sample(sample, dmso, blank=None, lambda_reg=0.0, initial_estimates='LPF',
+               smoothing_factor=None, neg_ss_correction=False,
+               association_weight=0.0, n_starts=1, fast=True, rng_seed=None):
     """Fit a single sample using Direct Kinetics → ODE refinement.
 
     Parameters
     ----------
     sample : dict
         Sample cycle from load_cxw().
-    dmso_cals : list[dict]
-        DMSO calibration cycles.
-    blanks : list[dict] or None
-        Blank cycles for double referencing.
+    dmso : dict or None
+        DMSO calibration cycle.
+    blank : dict or None
+        Blank cycle for double referencing.
     lambda_reg : float
         Tikhonov regularisation for Direct Kinetics initial estimates.
+    initial_estimates : str
+        Method for initial estimates: 'DK' (Direct Kinetics) or 'LPF' (last-pulse fit).
     smoothing_factor : float or None
         Smoothing parameter for spline in Direct Kinetics.
     neg_ss_correction : bool
@@ -274,6 +286,11 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         steady-state response during last dissociation (Rinse → RinseEnd).
     n_starts : int
         Number of starting points for ODE multi-start refinement.
+    fast : bool
+        Use the stable two-half-step exponential propagator when true
+        (default), or the legacy adaptive RK45 solver when false.
+    rng_seed : int or None
+        Seed for reproducible ODE multi-start perturbations.
 
     Returns
     -------
@@ -281,16 +298,54 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         Full ODE fit results plus Direct Kinetics initial estimates
         and preprocessed signal arrays.
     """
-    # Step 1: Direct Kinetics for initial estimates
-    dk = dk_fit_sample(sample, dmso_cals, blanks=blanks,
-                       lambda_reg=lambda_reg,
-                       smoothing_factor=smoothing_factor)
-
-    t = dk['t']
-    signal = dk['signal']
+    # Step 1: Initial estimates
+    if initial_estimates == 'DK':
+        try:
+            dk = dk_fit_sample(sample, dmso, blank=blank,
+                            lambda_reg=lambda_reg,
+                            smoothing_factor=smoothing_factor)
+            t = dk['t']
+            signal = dk['signal']
+            blank_index = dk['blank_index']
+            seed_method = 'DK'
+            ka_seed = dk['ka']
+            kd_seed = dk['kd']
+            KD_seed = dk['KD']
+            Rmax_seed = dk['Rmax']
+        except Exception as e:
+            print(f'WARNING! Direct Kinetics failed for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
+                  f'channel {sample.get("channel", "")}): {e}. Using default seeds for ODE fitting.')
+            kd_seed = 1e-3
+            ka_seed = 1e3
+            Rmax_seed = 10.0
+    else:
+        if initial_estimates != 'LPF':
+            print(f'WARNING! Unknown initial_estimates method "{initial_estimates}", defaulting to LPF (last-pulse fit).')
+        try:
+            t = sample['time']
+            asso_mask = (t >= sample['markers'].get('Injection', 0)) & (t <= sample['markers'].get('Rinse', t[-1]))
+            signal, blank_index = double_reference(sample, blank)
+            seed_method = 'last_pulse_fit'
+            kd_seed, _, _, _ = fit_last_disso(sample, channel="signal", blank=blank)
+            ka_seed, _, _, _, _, _ = fit_last_asso(sample, blank=blank, koff=kd_seed)
+            KD_seed = kd_seed / ka_seed if ka_seed > 0 else np.nan
+            ka_c = ka_seed * sample['concentration_M']
+            if not np.isfinite(ka_c) or ka_c <= 0:
+                raise ValueError(
+                    'last-pulse association fit produced a non-positive '
+                    'ka × concentration seed')
+            Rmax_seed = signal[asso_mask].max() * ((ka_c + kd_seed) / ka_c)
+            if not np.isfinite(Rmax_seed) or Rmax_seed <= 0:
+                raise ValueError(
+                    'last-pulse fit produced an invalid Rmax seed')
+        except Exception as e:
+            print(f'WARNING! Last-pulse fit failed for sample {sample["index"]} (RK serie {sample.get("rk_serie_id", "")}, '
+                  f'channel {sample.get("channel", "")}): {e}. Using default seeds for ODE fitting.')
+            kd_seed = 1e-3
+            ka_seed = 1e3
+            Rmax_seed = 10.0
 
     # Build pulsed c(t) for ODE fitting (preserves pulse structure)
-    dmso = select_dmso_cal(sample['index'], dmso_cals)
     c_func_pulsed, _ = build_pulsed_concentration_profile(
         dmso, sample['concentration_M'])
 
@@ -308,8 +363,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
 
     # Step 2: ODE fit on trimmed arrays
     ode = ode_fit(t_fit, sig_fit, c_func_pulsed, w_fit, sample['markers'],
-                  ka0=dk['ka'], kd0=dk['kd'], Rmax0=dk['Rmax'],
-                  n_starts=n_starts)
+                  ka0=ka_seed, kd0=kd_seed, Rmax0=Rmax_seed,
+                  n_starts=n_starts, rng_seed=rng_seed, fast=fast)
 
     # Map R_fit back to full time grid
     R_fit_full = np.full_like(signal, np.nan)
@@ -321,20 +376,20 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     ode['residuals'] = residuals_full
 
     # Store envelope c_func for DK results / visualization
-    ode['c_func'] = dk['c_func']
+    ode['c_func'] = c_func_pulsed
 
     # Combine results
-    ode['dk_ka'] = dk['ka']
-    ode['dk_kd'] = dk['kd']
-    ode['dk_Rmax'] = dk['Rmax']
-    ode['dk_KD'] = dk['KD']
-    ode['R0_dissoc'] = dk['R0_dissoc']
+    ode['seed_method'] = seed_method
+    ode['ka_seed'] = ka_seed
+    ode['kd_seed'] = kd_seed
+    ode['Rmax_seed'] = Rmax_seed
+    ode['KD_seed'] = KD_seed
     ode['t'] = t
     ode['signal'] = signal
     if neg_ss_correction:
         ode['signal'] -= min_diss
-    ode['c_raw'] = dk['c_raw']
-    ode['dmso_index'] = dk['dmso_index']
-    ode['blank_index'] = dk['blank_index']
+    ode['dmso_index'] = dmso['index'] if dmso else None
+    ode['blank_index'] = blank_index
+    ode['fast'] = fast
 
     return ode

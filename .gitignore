@@ -5,6 +5,8 @@ __pycache__/
 .DS_Store
 *.png
 *.csv
+!data/experimentalist_benchmark/
+!data/experimentalist_benchmark/*.csv
 /notebooks/.ipynb_checkpoints/
 .ipynb_checkpoints/
 results/

@@ -146,6 +146,39 @@ class TestSmoothing:
 
 
 class TestSimulation:
+    def test_fast_and_legacy_propagators_agree_for_constant_concentration(self):
+        t = np.linspace(0.0, 20.0, 201)
+        c_func = lambda x: np.full_like(np.asarray(x, dtype=float), 1e-6)
+
+        fast = simulate_sensorgram(t, 1e4, 0.05, 100.0, c_func,
+                                   fast=True)
+        legacy = simulate_sensorgram(t, 1e4, 0.05, 100.0, c_func,
+                                     fast=False)
+
+        np.testing.assert_allclose(fast, legacy, rtol=1e-5, atol=1e-7)
+
+    def test_constant_concentration_matches_exact_solution(self):
+        t = np.array([0.0, 0.1, 0.4, 1.0, 2.0])
+        ka, kd, Rmax, concentration = 1e4, 0.05, 100.0, 2e-5
+        c_func = lambda x: np.full_like(np.asarray(x, dtype=float), concentration)
+
+        result = simulate_sensorgram(t, ka, kd, Rmax, c_func)
+
+        rate = ka * concentration + kd
+        equilibrium = ka * concentration * Rmax / rate
+        expected = equilibrium * (1.0 - np.exp(-rate * t))
+        np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+
+    def test_fast_propagator_tracks_legacy_for_varying_concentration(self):
+        t = np.linspace(0.0, 20.0, 41)
+        c_func = lambda x: 2e-6 * (1.0 + 0.8 * np.sin(np.asarray(x) / 2.0))
+
+        fast = simulate_sensorgram(t, 2e5, 0.2, 100.0, c_func, fast=True)
+        legacy = simulate_sensorgram(t, 2e5, 0.2, 100.0, c_func,
+                                     fast=False)
+
+        np.testing.assert_allclose(fast, legacy, rtol=5e-4, atol=1e-3)
+
     def test_simulate_returns_array(self, dmso, sample):
         c_func, _ = build_concentration_profile(dmso, sample['concentration_M'])
         t = sample['time']

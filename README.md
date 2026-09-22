@@ -10,7 +10,7 @@ using a two-stage pipeline: **Direct Kinetics** for fast initial estimates, foll
 
 - **`.cxw` parser** — reads ZIP/XML/HDF5 experiment files directly
 - **Direct Kinetics (DK)** — millisecond-scale linear fit from dR/dt vs R
-- **ODE fitting** — full 1:1 Langmuir ODE solved with `scipy.integrate.solve_ivp`
+- **ODE fitting** — full 1:1 Langmuir ODE propagated with a stable fast two-half-step exponential update
 - **Batch processing** — fit all samples in a file with one call
 - **Non-specific binder detection** — flags samples with reference channel retention
 - **Quality flags** — automatic detection of boundary hits, high residuals, failed fits
@@ -81,6 +81,40 @@ Package raw signal data from one or more `.cxw` files into a self-describing zip
 (per-CXW folders → per-cycle folders → one CSV per `FCx-FCy` channel pair, plus
 `metadata.json` sidecars, `experiment.json`, and an auto-generated `README.md`).
 
+
+#### Plate-map remapping
+
+A SensoFit experiment can be remapped to a user-supplied well map during export.
+The plate map must contain, at minimum, these columns:
+
+```csv
+Pos,Designation,Concentration,MW
+A1,Cmpd-ID-001,25 uM,500
+B2,Cmpd-ID-002,100 nM,750
+```
+
+When a `platemap` is supplied, the exporter updates:
+
+- each reagent entry in `data["autosampler"][i]["reagents"]`
+  - `slot`
+  - `designation`
+  - `concentration_raw`
+  - `concentration_M`
+  - `mw_Da`
+- each sample entry in `data["samples"]`
+  - `name`
+  - `compound`
+  - `concentration_M`
+  - `mw`
+
+The output archive name is automatically suffixed with `_remapped` when the remap option is used, for example:
+
+```text
+my_dataset_remapped.zip
+```
+
+The plate map can be provided as either a CSV or an Excel workbook (`.xlsx` / `.xls`).
+
 ```bash
 # Single file → auto-named zip (sensofit_package_<timestamp>.zip)
 python -m sensofit export experiment.cxw
@@ -88,6 +122,16 @@ python -m sensofit export experiment.cxw
 # Multiple files / directories → custom output zip and package name
 python -m sensofit export file1.cxw file2.cxw data_folder/ \
     -o /tmp/my_dataset.zip --name my_dataset
+
+# Remap an experiment to a plate map before packaging
+# accepts CSV or XLSX and appends '_remapped' to the archive name
+python -m sensofit export experiment.cxw \
+    -o /tmp/remapped_dataset.zip \
+    --name remapped_dataset \
+    --platemap plate_map.csv
+
+# XLSX plate map works too
+python -m sensofit export experiment.cxw --platemap plate_map.xlsx
 ```
 
 Equivalent Python API:
@@ -98,6 +142,12 @@ from sensofit import export_package
 export_package(['file1.cxw', 'file2.cxw'],
                '/tmp/my_dataset.zip',
                package_name='my_dataset')
+
+# Remap autosampler/sample metadata using a plate map before export
+export_package(['experiment.cxw'],
+               '/tmp/remapped_dataset.zip',
+               package_name='my_dataset',
+               platemap='plate_map.csv')
 ```
 
 ### CSV columns
@@ -149,3 +199,31 @@ sensofit/
 2. **ODE Refinement**: Use DK estimates as seeds for multi-start `scipy.optimize.least_squares` (TRF) against the full numerical ODE solution. The number of random starts is controlled by `n_starts` (default 3; use 1 for fast screening, 10–20 for robust estimates). The fit window is trimmed to [Injection, RinseEnd + margin] to exclude baseline artefacts.
 
 See [docs/fitting_approach.md](docs/fitting_approach.md) for details.
+
+## Experimentalist benchmark
+
+The reviewed trace benchmark in `data/experimentalist_benchmark/` can score any
+approach that produces a keyed prediction CSV:
+
+```bash
+python -m sensofit.benchmark evaluate runs/my_run/predictions.csv \
+  --output runs/my_benchmark
+```
+
+`benchmark_trace_keys.csv` is an identifier template rather than a prediction
+file. The evaluator reports a clear input error when no usable predictions or
+matching benchmark traces are present.
+
+To run the current SensoFit implementation only on the annotated traces:
+
+```bash
+python -m sensofit.benchmark run --data-dir data --mode dk \
+  --output runs/experimentalist_benchmark_dk
+```
+
+See [docs/experimentalist_benchmark.md](docs/experimentalist_benchmark.md) for
+the task definitions, prediction contract, metrics, and ODE command.
+
+## Current joint-reference fitting method
+
+Use `ode_fit_variant="joint_reference_offset_prefit_basin"` in `batch_fit`, or `--ode-fit-variant joint_reference_offset_prefit_basin` in the CLI. See the [method documentation](docs/current_fitting_method.md) for commands, fitting settings, input requirements, and reporting gates. The historical fitter remains the default.

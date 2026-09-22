@@ -20,6 +20,7 @@ dependencies = [
     "joblib",
     "kivy",
     "openpyxl",
+    "pytest",
 ]
 
 [tool.setuptools.packages.find]

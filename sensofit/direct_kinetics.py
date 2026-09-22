@@ -17,8 +17,8 @@ Reference: Creoptix patent US20210241847A1, Example 1 (Eq. 41–52).
 """
 
 import numpy as np
-from .models import (build_concentration_profile, select_blank, select_dmso_cal,
-                     simulate_sensorgram, smooth_and_differentiate, double_reference)
+from .models import (build_concentration_profile, simulate_sensorgram,
+                     smooth_and_differentiate, double_reference, get_rmse)
 
 
 def direct_kinetics_fit(t, R_smooth, dRdt, c, w=None, lambda_reg=0.0):
@@ -121,7 +121,7 @@ def direct_kinetics_fit(t, R_smooth, dRdt, c, w=None, lambda_reg=0.0):
     }
 
 
-def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
+def fit_sample(sample, dmso, blank=None, lambda_reg=0.0,
                smoothing_factor=None):
     """Fit a single sample cycle using Direct Kinetics.
 
@@ -136,11 +136,10 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     ----------
     sample : dict
         A sample dict from ``load_cxw()``.
-    dmso_cals : list[dict]
-        DMSO calibration cycles from ``load_cxw()``.
-    blanks : list[dict] or None
-        Blank cycles for double referencing.  If None, only baseline-
-        subtraction is applied.
+    dmso : dict or None
+        DMSO calibration cycle.
+    blank : dict or None
+        Blank cycle for double referencing.
     lambda_reg : float
         Tikhonov regularisation parameter.
     smoothing_factor : float or None
@@ -152,8 +151,6 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
         ka, kd, Rmax, KD, and auxiliary arrays.
     """
     t = sample['time']
-    blank = select_blank(sample['index'], blanks) if blanks else None
-    dmso = select_dmso_cal(sample['index'], dmso_cals)
     c_func, c_raw = build_concentration_profile(dmso, sample['concentration_M'])
 
     # --- Double referencing ---
@@ -198,6 +195,8 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     # Simulate fitted sensorgram for plotting
     R_fit = simulate_sensorgram(t, ka, kd, Rmax,
                                 c_func, R0=R0)
+    fit_mask = np.isfinite(R_fit)
+    rmse = get_rmse(signal_bl[fit_mask], R_fit[fit_mask])
 
     result['ka'] = ka
     result['kd'] = kd
@@ -205,7 +204,7 @@ def fit_sample(sample, dmso_cals, blanks=None, lambda_reg=0.0,
     result['KD'] = KD
     result['Rmax_corrected'] = Rmax
     result['R0_dissoc'] = R0
-
+    result['rmse'] = rmse
     result['c_func'] = c_func
     result['c_raw'] = c_raw
     result['R_fit'] = R_fit

@@ -57,10 +57,20 @@ $$
 \text{signal\_dr} = (\text{signal\_sample} - \text{baseline\_sample}) - (\text{signal\_blank} - \text{baseline\_blank})
 $$
 
-The nearest *preceding* blank is preferred. If subtraction yields negative
-peak response (blank overcorrection), subsequent preceding blanks are tried.
+The nearest valid *preceding* blank is preferred. Current-mode QC is applied
+directly to the raw blank trace and is cached once per experiment. A blank
+that fails any current QC rule is rejected. The current rules are: baseline
+standard deviation ≤2.5 RU;
+first-versus-last 10-second baseline shift ≤2 RU; final steady-state response
+<5 RU; maximum response ≤50 RU; fewer than three consecutive points strictly
+below −5 RU; Injection-to-Rinse and Rinse-to-RinseEnd means ≥−2 RU; and a
+final-versus-initial dissociation 10-second median drop >−2 RU. If a blank is
+rejected, the next valid preceding blank is used. Legacy selection remains
+unchanged and is available for controlled comparisons.
 
-**Implementation:** `models.double_reference(sample, blanks)`
+**Implementation:** `models.select_blank(sample_index, blanks)` followed by
+`models.double_reference(sample, blank)`. Pass `--blank-selection legacy` to
+the command-line interface to reproduce the pre-stability blank rules.
 
 ### 2c. Non-Specific Binder Detection
 
@@ -249,8 +259,19 @@ $$
 \min_{k_a, k_d, R_{max}} \sum_i w_i \cdot \left( R_i^{obs} - R_i^{sim}(k_a, k_d, R_{max}) \right)^2
 $$
 
-where $R^{sim}$ is obtained by integrating the Langmuir ODE with pulsed c(t)
-using `scipy.integrate.solve_ivp` (RK45, rtol=1e-8).
+where $R^{sim}$ is obtained by propagating the Langmuir ODE with pulsed
+$c(t)$. Each measured time interval is propagated as two half-intervals;
+concentration is evaluated at the midpoint of each half-interval and held
+constant there, for which the scalar Langmuir ODE has an exact exponential
+solution. This retains unconditional stability while improving the accuracy
+of the fast update around changing pulse concentrations, without an adaptive
+solver inside every residual evaluation.
+
+The two-half-step exponential propagator is selected by default with
+`fast=True`. For comparison with the original implementation, pass
+`fast=False` to `ode_fitting.fit_sample`, `ode_fitting.ode_fit`, or
+`batch.batch_fit`; this restores the adaptive RK45 solver with the legacy
+tolerances and maximum step size.
 
 **Multi-start protocol** (controlled by `n_starts`, default 3):
 - Start 1: Phase 2 estimates (ka, kd from DK, Rmax)

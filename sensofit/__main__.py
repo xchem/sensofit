@@ -23,10 +23,11 @@ import os
 import sys
 import time
 
+import numpy as np
 import pandas as pd
 
 from .batch import batch_fit, flag_poor_fits
-from .plotting import save_fit_plots
+from .plotting import save_fit_plots, save_plots
 from .dataexporter import export_package
 from .package_loader import load_experiment
 from .models import select_blank, _get_binding_response, fit_last_disso
@@ -66,7 +67,11 @@ def _run_gui():
     from .gui import SensoFitApp
     SensoFitApp().run()
 
-def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_jobs=None):
+def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
+              n_parallel_jobs=None, fast=True, blank_selection='current',
+              rng_seed=None, ligand_mw=None, only_plot_fits=False,
+              ode_fit_variant='legacy', prefit_thresholds=None, 
+              fit_no_binding=False, max_cost_ratio=1.1):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -75,11 +80,19 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_j
     print(f'Mode: {mode.upper()}')
     print(f'{"=" * 60}')
 
-    df, data, results = batch_fit(filepath, mode=mode,channels=channels,
-                                  progress=True, n_starts=n_starts, n_parallel_jobs=n_parallel_jobs)
+    df, data, results = batch_fit(filepath, mode=mode, channels=channels,
+                                  progress=True, n_starts=n_starts,
+                                  n_parallel_jobs=n_parallel_jobs, fast=fast,
+                                  blank_selection=blank_selection,
+                                  rng_seed=rng_seed,
+                                  ligand_mw=ligand_mw,
+                                  ode_fit_variant=ode_fit_variant,
+                                  prefit_thresholds=prefit_thresholds,
+                                  fit_no_binding=fit_no_binding, 
+                                  max_cost_ratio=max_cost_ratio)
     if df.empty:
         return df
-    
+
     # Add source file info
     df.insert(0, 'source_file', os.path.basename(filepath))
 
@@ -88,9 +101,18 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all', n_parallel_j
 
     # Save plots
     samples = data['samples']
+    blanks = data['blanks']
     plot_dir = os.path.join(output_dir, f'{basename}_{mode}_plots')
-    paths = save_fit_plots(df, samples, results,
-                            plot_dir, mode=mode, n_parallel_jobs=n_parallel_jobs)
+    if only_plot_fits:
+        paths = save_fit_plots(df, samples, results,
+                               plot_dir, mode=mode,
+                               n_parallel_jobs=n_parallel_jobs,
+                               blanks=blanks)
+    else:
+        paths = save_plots(df, samples, results,
+                          plot_dir, mode=mode,
+                          n_parallel_jobs=n_parallel_jobs,
+                          blanks=blanks)
     n_plots = sum(1 for p in paths if p is not None)
     print(f'  Saved {n_plots} plot(s) → {plot_dir}/')
 
@@ -125,11 +147,18 @@ def _run_export(argv):
     parser.add_argument('--name', default=None,
                         help='Package name (used in README and as the top-'
                              'level folder inside the zip).')
+    parser.add_argument('--platemap', '-p', default=None,
+                        help='Optional plate-map CSV or XLSX file to remap '
+                             'autosampler/sample metadata before export. '
+                             'When used, the output archive gets a "_remapped" suffix.')
     args = parser.parse_args(argv)
 
     cxw_files = _expand_cxw_inputs(args.paths)
     if not cxw_files:
         print('No .cxw files found.', file=sys.stderr)
+        sys.exit(1)
+    if args.platemap and not os.path.isfile(args.platemap):
+        print(f'Plate map file not found: {args.platemap}', file=sys.stderr)
         sys.exit(1)
 
     output = args.output
@@ -140,7 +169,8 @@ def _run_export(argv):
     print(f'Exporting {len(cxw_files)} .cxw file(s)...')
     for f in cxw_files:
         print(f'  - {os.path.basename(f)}')
-    out_path = export_package(cxw_files, output, package_name=args.name)
+    out_path = export_package(cxw_files, output, package_name=args.name,
+                             platemap=args.platemap)
     print(f'Wrote package: {out_path}')
 
 
@@ -232,7 +262,7 @@ def _run_last_disso_fit(argv):
                 results["koff_ratio_active/ref"].append(koff_active/koff_ref if koff_ref != 0 else np.inf)
                 results["binding_response"].append(bind_response)
             except Exception as e:
-                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s["channel"]}):\n"
+                print(f"Error fitting last dissociation of sample {s['compound']} (cycle {s['index']}, channel {s['channel']}):\n"
                       f"{e}")
                 continue
         filepath = args.output+"/"+str(os.path.basename(f)).replace(".cxw", "_check.csv")
@@ -282,6 +312,11 @@ def main(argv=None):
         help='Number of parallel jobs to run. Default: None (not using parallelization).',
     )
     parser.add_argument(
+        '--slow-ode', action='store_false', dest='fast',
+        help='Use the legacy adaptive RK45 ODE solver instead of the fast '
+             'exponential midpoint propagator.',
+    )
+    parser.add_argument(
         '--output', '-o', default='results',
         help='Output directory for CSV and plots. Default: results/',
     )
@@ -290,7 +325,48 @@ def main(argv=None):
         help='Active flow cell numbers to process (e.g. --channels 2 3). '
              'Default: all active channels.',
     )
-
+    parser.add_argument(
+        '--blank-selection', choices=['current', 'legacy'], default='current',
+        help='Blank quality rules to use. Use legacy for an old-selection '
+             'baseline with otherwise identical fitting code. Default: current.',
+    )
+    parser.add_argument(
+        '--rng-seed', type=int, default=None,
+        help='Base random seed for reproducible ODE multi-start fits. Each '
+             'sample receives a deterministic offset. Default: unset.',
+    )
+    parser.add_argument(
+        '--ligand-mw', type=float, default=None,
+        help='Molecular weight of the ligand (molecule immobilised on the sensor surface) '
+             'in Daltons (Da). This is used to calculate the theoretical Rmax. If provided '
+             'by the user, `ligand_mw` will override the value from the metadata.',
+    )
+    parser.add_argument(
+        '--only-plot-fits', action='store_true', default=False,
+        help='Use the legacy per-sample fit plot saver instead of the grouped '
+             'triplicate plot output. Default: False.',
+    )
+    parser.add_argument(
+        '--ode-fit-variant',
+        choices=['legacy', 'joint_reference_offset_prefit_basin'],
+        default='joint_reference_offset_prefit_basin',
+        help='Use legacy fitting or the current per-channel joint-reference '
+             'method with physical bounds and pre-fit basin selection. ' \
+             'Default: joint_reference_offset_prefit_basin.',
+    )
+    parser.add_argument(
+        '--prefit-thresholds', nargs=3, type=float, metavar=('WEAK', 'MEDIUM', 'TIGHT'),
+        help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.'
+    )
+    parser.add_argument(
+        '--fit-no-binding', action='store_true',
+        help='Fit pre-fit no-binding traces; retain other exclusion checks.'
+    )
+    parser.add_argument(
+        '--max-cost-ratio', type=float, default=1.1,
+        help='Current-method constrained/unrestricted cost limit (>= 1). Default: 1.1.'
+    )
+    
     args = parser.parse_args(argv)
 
     cxw_files = _find_cxw_files(args.input)
@@ -305,7 +381,17 @@ def main(argv=None):
     for filepath in cxw_files:
         for mode in modes:
             df = _run_mode(filepath, mode, args.n_starts, args.output,
-                           channels=channels, n_parallel_jobs=args.n_parallel_jobs)
+                           channels=channels,
+                           n_parallel_jobs=args.n_parallel_jobs,
+                           fast=args.fast,
+                           blank_selection=args.blank_selection,
+                           rng_seed=args.rng_seed,
+                           ligand_mw=args.ligand_mw,
+                           only_plot_fits=args.only_plot_fits,
+                           ode_fit_variant=args.ode_fit_variant,
+                           prefit_thresholds=args.prefit_thresholds,
+                           fit_no_binding=args.fit_no_binding, 
+                           max_cost_ratio=args.max_cost_ratio)
             if df.empty:
                 continue
             all_dfs.append(df)
@@ -316,12 +402,13 @@ def main(argv=None):
     # Reorder columns: source_file, cycle_index, compound first
     priority = ['source_file', 'rk_serie_id', 'cycle_index', 'channel',
                 'compound_type', 'compound', 'concentration_M', 'concentration_uM',
-                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'sqrt_chi2', 'sigma_res', 'flag',
-                'flag_reason']
+                'fit_mode', 'ka', 'kd', 'KD', 'KD_uM', 'Rmax', 'rmse', 'sigma_res',
+                'binding', 'non_specific', 'noisy', 'injection_issue', 'carryover',
+                'success', 'error', 'flag', 'flag_reason']
     ordered = [c for c in priority if c in combined.columns]
     remaining = [c for c in combined.columns if c not in ordered]
     combined = combined[ordered + remaining]
-    combined.sort_values(['rk_serie_id','cycle_index', 'channel'],
+    combined.sort_values(['source_file', 'rk_serie_id','cycle_index', 'channel'],
                          inplace=True)
 
     csv_path = os.path.join(args.output, 'batch_results.csv')

@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 from .package_loader import load_experiment
-from .models import select_blank, _get_binding_response, fit_last_disso, _disso_rate_equation, double_reference
+from .models import select_blank, _get_binding_response, fit_last_disso, double_reference
 
 MODULES = {
     'protocol_dev': {
@@ -238,46 +238,67 @@ class CheckSensorgramsScreen(Screen):
         self.plot_image_1 = Image(size_hint_y=0.5)
         self.plot_image_2 = Image(size_hint_y=0.5)
 
-        # LHS - Undeneath figure: Flags and Comment container (horizontal layout)
+        # LHS - Bottom: Flags and Comment container (horizontal layout)
         flags_comment_container = BoxLayout(orientation='horizontal', size_hint_y=None, height=80, spacing=8)
         
-        # Left --> Good and Bad checkboxes (vertical)
-        flags_container = BoxLayout(orientation='vertical', size_hint_x=0.3, spacing=6)
-        good_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
-        self.good_checkbox = CheckBox(size_hint_x=None, width=24)
-        good_label = Label(text='Good', size_hint_x=None, width=80, halign='left', valign='middle')
-        good_label.bind(size=good_label.setter('text_size'))
-        good_row.add_widget(self.good_checkbox)
-        good_row.add_widget(good_label)
+        # Left --> Binding, No Binding, and Non-specific interaction checkboxes (vertical)
+        flags_bind_container = BoxLayout(orientation='vertical', size_hint_x=0.2, spacing=6)
+        binding_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
+        self.binding_checkbox = CheckBox(size_hint_x=None, width=24)
+        binding_label = Label(text='Binding', size_hint_x=None, width=100, halign='left', valign='middle')
+        binding_label.bind(size=binding_label.setter('text_size'))
+        binding_row.add_widget(self.binding_checkbox)
+        binding_row.add_widget(binding_label)
         
-        bad_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
-        self.bad_checkbox = CheckBox(size_hint_x=None, width=24)
-        bad_label = Label(text='Bad', size_hint_x=None, width=80, halign='left', valign='middle')
-        bad_label.bind(size=bad_label.setter('text_size'))
-        bad_row.add_widget(self.bad_checkbox)
-        bad_row.add_widget(bad_label)
-        
-        flags_container.add_widget(good_row)
-        flags_container.add_widget(bad_row)
-        self.good_checkbox.bind(active=self.on_flag_change)
-        self.bad_checkbox.bind(active=self.on_flag_change)
-        
+        no_bind_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
+        self.no_bind_checkbox = CheckBox(size_hint_x=None, width=24)
+        no_bind_label = Label(text='No Binding', size_hint_x=None, width=100, halign='left', valign='middle')
+        no_bind_label.bind(size=no_bind_label.setter('text_size'))
+        no_bind_row.add_widget(self.no_bind_checkbox)
+        no_bind_row.add_widget(no_bind_label)
+
+        flags_bind_container.add_widget(binding_row)
+        flags_bind_container.add_widget(no_bind_row)
+
+        flags_other_container = BoxLayout(orientation='vertical', size_hint_x=0.2, spacing=6)
+        nsi_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
+        self.nsi_checkbox = CheckBox(size_hint_x=None, width=24)
+        nsi_label = Label(text='Non-specific Interaction', size_hint_x=None, width=100, halign='left', valign='middle')
+        nsi_label.bind(size=nsi_label.setter('text_size'))
+        nsi_row.add_widget(self.nsi_checkbox)
+        nsi_row.add_widget(nsi_label)
+
+        other_row = BoxLayout(orientation='horizontal', size_hint_y=None, height=28, spacing=8)
+        self.other_checkbox = CheckBox(size_hint_x=None, width=24)
+        other_label = Label(text='Other', size_hint_x=None, width=100, halign='left', valign='middle')
+        other_label.bind(size=other_label.setter('text_size'))
+        other_row.add_widget(self.other_checkbox)
+        other_row.add_widget(other_label)
+
+        flags_other_container.add_widget(nsi_row)
+        flags_other_container.add_widget(other_row)
+        self.binding_checkbox.bind(active=self.on_flag_change)
+        self.no_bind_checkbox.bind(active=self.on_flag_change)
+        self.nsi_checkbox.bind(active=self.on_flag_change)
+        self.other_checkbox.bind(active=self.on_flag_change)
+
         # Right --> Comment box
-        comment_subcontainer = BoxLayout(orientation='vertical', size_hint_x=0.7, spacing=2)
-        comment_label = Label(text='Comment:', size_hint_y=None, height=20, halign='left', valign='middle')
+        comment_subcontainer = BoxLayout(orientation='vertical', size_hint_x=0.6, spacing=2)
+        comment_label = Label(text='Comment:', size_hint_y=None, height=28, halign='left', valign='middle')
         comment_label.bind(size=comment_label.setter('text_size'))
         self.comment_input = TextInput(
             text='',
             multiline=True,
             size_hint_y=None,
-            height=56,
+            height=50,
             halign='left',
         )
         self.comment_input.bind(text=self.on_comment_change)
         comment_subcontainer.add_widget(comment_label)
         comment_subcontainer.add_widget(self.comment_input)
         
-        flags_comment_container.add_widget(flags_container)
+        flags_comment_container.add_widget(flags_bind_container)
+        flags_comment_container.add_widget(flags_other_container)
         flags_comment_container.add_widget(comment_subcontainer)
         
         # LHS - Bottom: navigation buttons (Previous/Next)
@@ -403,8 +424,10 @@ class CheckSensorgramsScreen(Screen):
         self.list_container.clear_widgets()
         self.plot_image_1.texture = None
         self.plot_image_2.texture = None
-        self.good_checkbox.active = False
-        self.bad_checkbox.active = False
+        self.binding_checkbox.active = False
+        self.no_bind_checkbox.active = False
+        self.nsi_checkbox.active = False
+        self.other_checkbox.active = False
         self.comment_input.text = ''
         self.import_button.disabled = True
         self.filter_button.disabled = True
@@ -467,23 +490,23 @@ class CheckSensorgramsScreen(Screen):
         sample_bl['sensorgram'], _ = double_reference(sample, blank)
 
         try:
-            popt_act, perr_act = fit_last_disso(sample_bl, channel='raw_active')
+            koff_act, koff_act_err, koff_act_fit, _ = fit_last_disso(sample_bl, channel='raw_active')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for active channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
-            popt_act, perr_act = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_act, koff_act_err, koff_act_fit = np.nan, np.nan, np.array([])
         try:
-            popt_ref, perr_ref = fit_last_disso(sample_bl, channel='raw_reference')
+            koff_ref, koff_ref_err, koff_ref_fit, _ = fit_last_disso(sample_bl, channel='raw_reference')
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for reference channel of sample {sample_bl['compound']} (cycle {sample_bl['index']})...\n"
                   f"Error: {e}")
-            popt_ref, perr_ref = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_ref, koff_ref_err, koff_ref_fit = np.nan, np.nan, np.array([])
         try:
-            popt_senso, perr_senso = fit_last_disso(sample_bl, channel='signal', blank=blank)
+            koff_senso, koff_senso_err, koff_senso_fit, _ = fit_last_disso(sample_bl, channel='signal', blank=blank)
         except Exception as e:
             print(f"WARNING! Couldn't fit last dissociation for sample {sample_bl['compound']} (cycle {sample_bl['index']} | channel {sample_bl['channel']})...\n"
                   f"Error: {e}")
-            popt_senso, perr_senso = [np.nan, np.nan, np.nan],  [np.nan, np.nan, np.nan]
+            koff_senso, koff_senso_err, koff_senso_fit = np.nan, np.nan, np.array([])
         try:
             bind_resp = _get_binding_response(sample_bl, sample_bl['sensorgram'])
         except Exception as e:
@@ -495,8 +518,8 @@ class CheckSensorgramsScreen(Screen):
         channel = sample_bl.get('channel', 'n/a')
         label = f'{compound} (cycle {cycle_id} - channel {channel})'
 
-        fig1_data = self._get_fig1_data(sample_bl, blank, popt_act, popt_ref)
-        fig2_data = self._get_fig2_data(sample_bl, popt_senso)
+        fig1_data = self._get_fig1_data(sample_bl, blank, koff_act_fit, koff_ref_fit)
+        fig2_data = self._get_fig2_data(sample_bl, koff_senso_fit)
 
         self.samples_info.append({
             'label': label,
@@ -505,23 +528,19 @@ class CheckSensorgramsScreen(Screen):
             'channel': channel,
             'fig1_data': fig1_data,
             'fig2_data': fig2_data,
-            'koff_active': float(popt_act[0]),
-            'koff_active_error': float(perr_act[0]),
-            'koff_reference': float(popt_ref[0]),
-            'koff_reference_error': float(perr_ref[0]),
-            'koff_sensorgram': float(popt_senso[0]),
-            'koff_sensorgram_error': float(perr_senso[0]),
+            'koff_active': float(koff_act),
+            'koff_active_error': float(koff_act_err),
+            'koff_reference': float(koff_ref),
+            'koff_reference_error': float(koff_ref_err),
+            'koff_sensorgram': float(koff_senso),
+            'koff_sensorgram_error': float(koff_senso_err),
             'binding_response': float(bind_resp),
             'sample': sample_bl,
             'blank': blank,
-            'popt_active': popt_act,
-            'perr_active': perr_act,
-            'popt_reference': popt_ref,
-            'perr_reference': perr_ref,
-            'popt_sensorgram': popt_senso,
-            'perr_sensorgram': perr_senso,
-            'good_flag': False,
-            'bad_flag': False,
+            'binding_flag': False,
+            'no_binding_flag': False,
+            'non_specific_flag': False,
+            'other_flag': False,
             'comment': '',
         })
 
@@ -681,22 +700,30 @@ class CheckSensorgramsScreen(Screen):
     def select_item(self, item):
         # Save previous item's flags/comment if any
         if self.selected_item and self.selected_item != item:
-            self.selected_item['good_flag'] = self.good_checkbox.active
-            self.selected_item['bad_flag'] = self.bad_checkbox.active
+            self.selected_item['binding_flag'] = self.binding_checkbox.active
+            self.selected_item['no_binding_flag'] = self.no_bind_checkbox.active
+            self.selected_item['non_specific_flag'] = self.nsi_checkbox.active
+            self.selected_item['other_flag'] = self.other_checkbox.active
             self.selected_item['comment'] = self.comment_input.text
         
         # Load new item and populate UI
         self.selected_item = item
-        if 'good_flag' not in item:
-            item['good_flag'] = False
-        if 'bad_flag' not in item:
-            item['bad_flag'] = False
+        if 'binding_flag' not in item:
+            item['binding_flag'] = False
+        if 'no_binding_flag' not in item:
+            item['no_binding_flag'] = False
+        if 'non_specific_flag' not in item:
+            item['non_specific_flag'] = False
+        if 'other_flag' not in item:
+            item['other_flag'] = False
         if 'comment' not in item:
             item['comment'] = ''
         
         # Populate flags and comment UI (without triggering change handlers)
-        self.good_checkbox.active = item.get('good_flag', False)
-        self.bad_checkbox.active = item.get('bad_flag', False)
+        self.binding_checkbox.active = item.get('binding_flag', False)
+        self.no_bind_checkbox.active = item.get('no_binding_flag', False)
+        self.nsi_checkbox.active = item.get('non_specific_flag', False)
+        self.other_checkbox.active = item.get('other_flag', False)
         self.comment_input.text = item.get('comment', '')
         
         # Refresh highlighting and plots
@@ -704,11 +731,13 @@ class CheckSensorgramsScreen(Screen):
         self.update_plots()
 
     def on_flag_change(self, instance, value):
-        """Handle good/bad flag changes."""
+        """Handle flag changes."""
         if self.selected_item:
-            self.selected_item['good_flag'] = self.good_checkbox.active
-            self.selected_item['bad_flag'] = self.bad_checkbox.active
-
+            self.selected_item['binding_flag'] = self.binding_checkbox.active
+            self.selected_item['no_binding_flag'] = self.no_bind_checkbox.active
+            self.selected_item['non_specific_flag'] = self.nsi_checkbox.active
+            self.selected_item['other_flag'] = self.other_checkbox.active
+            
     def on_comment_change(self, instance, value):
         """Handle comment text changes."""
         if self.selected_item:
@@ -718,8 +747,10 @@ class CheckSensorgramsScreen(Screen):
         """Open file browser and export data to CSV or XLSX."""
         # Save current item's flags/comment
         if self.selected_item:
-            self.selected_item['good_flag'] = self.good_checkbox.active
-            self.selected_item['bad_flag'] = self.bad_checkbox.active
+            self.selected_item['binding_flag'] = self.binding_checkbox.active
+            self.selected_item['no_binding_flag'] = self.no_bind_checkbox.active
+            self.selected_item['non_specific_flag'] = self.nsi_checkbox.active
+            self.selected_item['other_flag'] = self.other_checkbox.active
             self.selected_item['comment'] = self.comment_input.text
         
         if not self.samples_info:
@@ -806,8 +837,10 @@ class CheckSensorgramsScreen(Screen):
                 'koff_sensorgram': item.get('koff_sensorgram', ''),
                 'koff_senso_err': item.get('koff_sensorgram_error', ''),
                 'bind_response': item.get('binding_response', ''),
-                'good_flag': item.get('good_flag', False),
-                'bad_flag': item.get('bad_flag', False),
+                'binding_flag': item.get('binding_flag', False),
+                'no_binding_flag': item.get('no_binding_flag', False),
+                'non_specific_flag': item.get('non_specific_flag', False),
+                'other_flag': item.get('other_flag', False),
                 'comments': item.get('comment', ''),
             }
             rows.append(row)
@@ -835,7 +868,7 @@ class CheckSensorgramsScreen(Screen):
         self.plot_image_1.texture = self.make_plot_texture(self.make_first_figure(fig1_data, koff_act, koff_ref, label))
         self.plot_image_2.texture = self.make_plot_texture(self.make_second_figure(fig2_data, koff_senso, bind_resp, label))
 
-    def _get_fig1_data(self, sample, blank, popt_act, popt_ref):
+    def _get_fig1_data(self, sample, blank, koff_act_fit, koff_ref_fit):
         data = {'blank_time': None, 'blank_signal': None}
         t = sample['time']
         data['sample_time'] = t
@@ -844,18 +877,10 @@ class CheckSensorgramsScreen(Screen):
         data['mask'] = disso_mask
         # Active channel
         data['active_signal'] = sample['raw_active_bl']
-        koff, R0, t0  = popt_act
-        if not np.isnan(koff):
-            data['active_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['active_fit'] = np.array([])
+        data['active_fit'] = koff_act_fit
         # Reference channel
         data['reference_signal'] = sample['raw_reference_bl']
-        koff, R0, t0 = popt_ref
-        if not np.isnan(koff):
-            data['reference_fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['reference_fit'] = np.array([])
+        data['reference_fit'] = koff_ref_fit
 
         if blank is not None:
             t_blank = blank['time']
@@ -866,7 +891,7 @@ class CheckSensorgramsScreen(Screen):
 
         return data
 
-    def _get_fig2_data(self, sample, popt_senso):
+    def _get_fig2_data(self, sample, koff_senso_fit):
         data = {}
         t = sample['time']
         data['time'] = t
@@ -874,13 +899,7 @@ class CheckSensorgramsScreen(Screen):
         disso_mask = t > t_rinse
         data['mask'] = disso_mask
         data['signal'] = sample['sensorgram']
-
-        koff, R0, t0 = popt_senso
-        if not np.isnan(koff):
-            data['fit'] = _disso_rate_equation(t[disso_mask], koff, R0, t0)
-        else:
-            data['fit'] = np.array([])
-
+        data['fit'] = koff_senso_fit
         return data
 
     def make_first_figure(self, data, koff_act, koff_ref, label):
@@ -968,7 +987,7 @@ class CheckSensorgramsScreen(Screen):
         popup.open()
 
     def _import_checks_from_file(self, filepath: str):
-        """Import good_flag, bad_flag, and comments from a CSV or XLSX file.
+        """Import binding_flag, no_binding_flag, non_specific_flag, other_flag, and comments from a CSV or XLSX file.
         
         Matches records by compound, index, and channel. Only updates if filename matches
         the currently processed file.
@@ -1003,8 +1022,10 @@ class CheckSensorgramsScreen(Screen):
             imported_compound = row.get('compound', '') if 'compound' in row else ''
             imported_index = row.get('cycle_id', '') if 'cycle_id' in row else ''
             imported_channel = row.get('channel', '') if 'channel' in row else ''
-            imported_good = row.get('good_flag', False) if 'good_flag' in row else False
-            imported_bad = row.get('bad_flag', False) if 'bad_flag' in row else False
+            imported_binding = row.get('binding_flag', False) if 'binding_flag' in row else False
+            imported_no_binding = row.get('no_binding_flag', False) if 'no_binding_flag' in row else False
+            imported_non_specific = row.get('non_specific_flag', False) if 'non_specific_flag' in row else False
+            imported_other = row.get('other_flag', False) if 'other_flag' in row else False
             imported_comment = row.get('comments', '') if 'comments' in row else ''
             
             # Find matching sample
@@ -1012,8 +1033,10 @@ class CheckSensorgramsScreen(Screen):
                 if (sample.get('compound') == imported_compound and
                     sample.get('cycle_id') == imported_index and
                     sample.get('channel') == imported_channel):
-                    sample['good_flag'] = bool(imported_good)
-                    sample['bad_flag'] = bool(imported_bad)
+                    sample['binding_flag'] = bool(imported_binding)
+                    sample['no_binding_flag'] = bool(imported_no_binding)
+                    sample['non_specific_flag'] = bool(imported_non_specific)
+                    sample['other_flag'] = bool(imported_other)
                     sample['comment'] = str(imported_comment) if pd.notna(imported_comment) else ''
                     matches_found += 1
                     break
@@ -1021,8 +1044,10 @@ class CheckSensorgramsScreen(Screen):
         # Refresh UI
         self.populate_sample_list()
         if self.selected_item:
-            self.good_checkbox.active = self.selected_item.get('good_flag', False)
-            self.bad_checkbox.active = self.selected_item.get('bad_flag', False)
+            self.binding_checkbox.active = self.selected_item.get('binding_flag', False)
+            self.no_bind_checkbox.active = self.selected_item.get('no_binding_flag', False)
+            self.nsi_checkbox.active = self.selected_item.get('non_specific_flag', False)
+            self.other_checkbox.active = self.selected_item.get('other_flag', False)
             self.comment_input.text = self.selected_item.get('comment', '')
         
         self.show_message(f'Import complete!\n{matches_found} records updated.')
