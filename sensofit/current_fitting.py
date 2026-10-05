@@ -435,7 +435,8 @@ def select_prefit_basin_fit(unrestricted, constrained, *, max_cost_ratio=1.1):
 def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0, n_starts=1,
             rng_seed=None, skip_s=1.0, fast=True, initial_starts=None, Rmax_bounds=None,
             reference_signal=None, reference_scale_bounds=(0.0, 2.0),
-            reference_scale_prior_fraction=1.0, pKD_bounds=None):
+            reference_scale_prior_fraction=1.0, double_referenced_signal=None,
+            pKD_bounds=None):
     """Fit log kinetic parameters and return the lowest-cost converged start.
 
     With pKD bounds, optimize (log10 KD, log10 kd, log10 Rmax) and
@@ -609,7 +610,7 @@ def ode_fit(t, signal, c_func, w, markers, ka0, kd0, Rmax0, n_starts=1,
     except np.linalg.LinAlgError:
         pass
     fit_mask = np.isfinite(R_fit)
-    rmse = get_rmse(signal[fit_mask], R_fit[fit_mask])
+    rmse = get_rmse(double_referenced_signal[fit_mask], R_fit[fit_mask]) if double_referenced_signal is not None else get_rmse(signal[fit_mask], R_fit[fit_mask])
     valid = (w > 0) & np.isfinite(R_fit)
     binding_amplitude = float(np.ptp(projection["binding"][valid])) if valid.any() else np.nan
     bound_tolerance = 0.0001
@@ -682,11 +683,11 @@ def fit_sample(sample, dmso, blank=None, initial_estimates="PHYSICAL", n_starts=
             prefit_basin = prefit_basin_seed_candidates(physical_seed, area_prior.regime)
     KD_seed = kd_seed / ka_seed
 
-    signal, reference_signal = blank_correct_raw_channels(sample, blank)
+    active_signal, reference_signal = blank_correct_raw_channels(sample, blank)
     c_func, _ = build_pulsed_concentration_profile(dmso, sample["concentration_M"])
     w = build_full_weight_mask(
         t, sample["markers"], dmso, association_weight=0.0, transition_window_s=0.5)
-    t_fit, sig_fit, w_fit, fit_mask = trim_to_fit_window(t, signal, w, sample["markers"])
+    t_fit, sig_fit, w_fit, fit_mask = trim_to_fit_window(t, active_signal, w, sample["markers"])
     effective_n_starts = max(int(n_starts), 9)
     options = dict(
         ka0=ka_seed, kd0=kd_seed, Rmax0=Rmax_seed, n_starts=effective_n_starts,
@@ -694,6 +695,7 @@ def fit_sample(sample, dmso, blank=None, initial_estimates="PHYSICAL", n_starts=
         reference_scale_bounds=reference_scale_bounds,
         Rmax_bounds=(physical_seed["Rmax_lower"], physical_seed["Rmax_upper"])
         if physical_seed else None,
+        double_referenced_signal=signal[fit_mask],
     )
     unrestricted = ode_fit(
         t_fit, sig_fit, c_func, w_fit, sample["markers"], **options,
@@ -734,7 +736,7 @@ def fit_sample(sample, dmso, blank=None, initial_estimates="PHYSICAL", n_starts=
     for key in ("R_fit", "residuals", "fit_weight", "objective_weight", "binding_fit",
                 "offset_fit", "drift_fit", "reference_component_fit"):
         if key in ode:
-            values = np.full_like(signal, 0.0 if key == "residuals" else np.nan)
+            values = np.full_like(active_signal, 0.0 if key == "residuals" else np.nan)
             values[fit_mask] = ode[key]
             ode[key] = values
     if raw_diagnostics is None:
@@ -748,7 +750,7 @@ def fit_sample(sample, dmso, blank=None, initial_estimates="PHYSICAL", n_starts=
         analyte_pulse_weight=0.0, transition_window_s=0.5, post_rinse_exclusion_s=0.0,
         dissociation_end_s=ode.get("dissociation_end_s", np.nan), reference_scale_fixed=np.nan,
         physical_seed_fallback_reason="non_positive_concentration" if fallback else None,
-        t=t, signal=signal, reference_signal=reference_signal, joint_channel_projection=True,
+        t=t, signal=signal, active_signal=active_signal, reference_signal=reference_signal, joint_channel_projection=True,
         dmso_index=dmso["index"] if dmso else None, blank_index=blank_index, fast=fast,
         aggregation="best", variable_nuisance=False, optimizer_loss="auto",
         requested_projected_nuisance="joint_reference_offset",

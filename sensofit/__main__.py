@@ -70,8 +70,8 @@ def _run_gui():
 def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
               n_parallel_jobs=None, fast=True, blank_selection='current',
               rng_seed=None, ligand_mw=None, only_plot_fits=False,
-              ode_fit_variant='legacy', prefit_thresholds=None, 
-              fit_no_binding=False, max_cost_ratio=1.1):
+              reference_scale_bounds=None, ode_fit_variant='legacy',
+              prefit_thresholds=None, fit_no_binding=False, max_cost_ratio=1.1):
     """Run batch_fit for one file in one mode, save plots and return df."""
     basename = os.path.splitext(os.path.basename(filepath))[0]
 
@@ -87,6 +87,7 @@ def _run_mode(filepath, mode, n_starts, output_dir, channels='all',
                                   rng_seed=rng_seed,
                                   ligand_mw=ligand_mw,
                                   ode_fit_variant=ode_fit_variant,
+                                  reference_scale_bounds=reference_scale_bounds,
                                   prefit_thresholds=prefit_thresholds,
                                   fit_no_binding=fit_no_binding, 
                                   max_cost_ratio=max_cost_ratio)
@@ -355,8 +356,12 @@ def main(argv=None):
              'Default: joint_reference_offset_prefit_basin.',
     )
     parser.add_argument(
+        '--ref-scale-bounds', nargs=2, type=float, metavar=('LOWER', 'UPPER'),
+        default=(0.0, 2.00), help='Bounds for the reference channel scaling factor. Default: 0.0 2.0.'
+    )
+    parser.add_argument(
         '--prefit-thresholds', nargs=3, type=float, metavar=('WEAK', 'MEDIUM', 'TIGHT'),
-        help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.'
+        default=(0.80, 2.05, 2.97), help='Current-method score boundaries, increasing. Default: 0.80 2.05 2.97.'
     )
     parser.add_argument(
         '--fit-no-binding', action='store_true',
@@ -389,6 +394,7 @@ def main(argv=None):
                            ligand_mw=args.ligand_mw,
                            only_plot_fits=args.only_plot_fits,
                            ode_fit_variant=args.ode_fit_variant,
+                           reference_scale_bounds=args.ref_scale_bounds,
                            prefit_thresholds=args.prefit_thresholds,
                            fit_no_binding=args.fit_no_binding, 
                            max_cost_ratio=args.max_cost_ratio)
