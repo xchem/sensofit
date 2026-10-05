@@ -27,8 +27,8 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
               n_starts=3, n_parallel_jobs=None, fast=True,
               blank_selection='current', rng_seed=None, 
               ligand_mw=None, subset_csv=None,
-              ode_fit_variant='legacy', prefit_thresholds=None,
-              fit_no_binding=False, max_cost_ratio=1.1):
+              ode_fit_variant='legacy', reference_scale_bounds=None, 
+              prefit_thresholds=None,fit_no_binding=False, max_cost_ratio=1.1):
     """Fit all samples in a .cxw file (or exported package) and return a DataFrame.
 
     Parameters
@@ -146,13 +146,15 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
         all_results = Parallel(n_jobs=n_parallel_jobs, backend=backend)(
             delayed(_batch_process)(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                     fit_func, n_starts, fast, blank_selection,
-                                    rng_seed, current_metadata, ligand_mw_origin)
+                                    rng_seed, reference_scale_bounds, current_metadata,
+                                    ligand_mw_origin)
             for i, sample in enumerate(samples)
         )
     else:
         all_results = [_batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode,
                                       fit_func, n_starts, fast, blank_selection,
-                                      rng_seed, current_metadata, ligand_mw_origin)
+                                      rng_seed, reference_scale_bounds, current_metadata,
+                                      ligand_mw_origin)
                        for i, sample in enumerate(samples)]
 
     results = [r[0] for r in all_results]
@@ -178,7 +180,8 @@ def batch_fit(filepath, mode='dk', channels='all', progress=True,
 
 def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func,
                    n_starts, fast=True, blank_selection='current', rng_seed=None,
-                   current_metadata=None, ligand_mw_origin="from_metadata"):
+                   reference_scale_bounds=None, current_metadata=None,
+                   ligand_mw_origin="from_metadata"):
     """Process a single sample with error handling and NSB filtering."""
     current = current_metadata is not None
     if progress and not current:
@@ -237,6 +240,7 @@ def _batch_process(i, t0, n, progress, sample, dmso_cals, blanks, mode, fit_func
             kwargs['n_starts'] = n_starts
             kwargs['fast'] = fast
             kwargs['rng_seed'] = (rng_seed + i if rng_seed is not None else None)
+            kwargs['reference_scale_bounds'] = reference_scale_bounds
         result = fit_func(sample, dmso, **kwargs)
         _add_blank_metadata(result, blank)
         row = _extract_row(sample, result, mode)
